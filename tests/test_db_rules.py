@@ -5,7 +5,8 @@ These tests talk to Postgres directly as the `agencydesk_api` role, the
 same role the FastAPI app uses, with the same per-request context. If a
 rule holds here, no API endpoint can break it by forgetting a WHERE.
 
-Run:  DATABASE_URL="host=/tmp/pg user=postgres dbname=ad_test" pytest -q tests/
+Run:  make test   (defaults match docker-compose.yml; override with
+      DATABASE_URL / ADMIN_DATABASE_URL as libpq conninfo strings)
 """
 import os
 import hashlib
@@ -17,8 +18,9 @@ import psycopg
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ADMIN_DSN = os.environ.get("ADMIN_DATABASE_URL", "host=/tmp/pg user=postgres dbname=postgres")
-DSN = os.environ.get("DATABASE_URL", "host=/tmp/pg user=postgres dbname=ad_test")
+PG = "host=localhost port=5433 user=postgres password=postgres"
+ADMIN_DSN = os.environ.get("ADMIN_DATABASE_URL", f"{PG} dbname=postgres")
+DSN = os.environ.get("DATABASE_URL", f"{PG} dbname=ad_test")
 
 PIXEL = "aaaaaaaa-0000-0000-0000-000000000001"
 NORTHWIND = "bbbbbbbb-0000-0000-0000-000000000001"

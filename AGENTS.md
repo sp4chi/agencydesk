@@ -38,16 +38,20 @@ Some of `backend/` and `frontend/` may not exist yet. Create them following this
 ## Commands
 
 ```bash
-# Run DB rule tests (creates/drops the ad_test database)
-DATABASE_URL="host=localhost user=postgres dbname=ad_test" \
-ADMIN_DATABASE_URL="host=localhost user=postgres dbname=postgres" \
-pytest -q tests/
-
-# Load schema + seed into a dev database manually
-psql -d agencydesk -v ON_ERROR_STOP=1 -f db/schema.sql -f db/seed.sql
+make install     # create .venv and install backend deps (Python 3.12+)
+make db-reset    # start Postgres in Docker (host port 5433), drop + recreate `agencydesk`,
+                 # alembic upgrade head, load db/seed.sql
+make migrate     # alembic upgrade head only
+make test        # pytest -q; tests create/drop their own databases (ad_test*)
 ```
 
-Add the backend run, migration and frontend commands here once they exist. Keep the README setup under 10 minutes; Docker Compose for Postgres is preferred.
+Defaults match `docker-compose.yml`; override with the variables in `.env.example`
+(`MIGRATION_DATABASE_URL` is a SQLAlchemy URL; `DATABASE_URL` / `ADMIN_DATABASE_URL` are libpq conninfo strings for the tests).
+
+Migrations: `backend/migrations/versions/`. Revision `0001_baseline` runs a frozen copy of `db/schema.sql`.
+New schema changes go in `db/schema.sql` **and** a new revision; `tests/test_migrations.py` fails if they drift.
+
+Add the backend run and frontend commands here once they exist.
 
 ---
 

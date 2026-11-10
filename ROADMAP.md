@@ -17,7 +17,7 @@ Rules for every step:
    Includes 2 agencies, Ravi (same email at both), a mix of internal and client-visible tasks, comments, files and time.
 3. [x] **DB rule tests:** [tests/test_db_rules.py](tests/test_db_rules.py)
    20 tests covering the five edge cases plus the "every tenant table has RLS" guard. They run as `agencydesk_api`, the role the API will use.
-4. [ ] **Docker Compose + Alembic baseline:** `docker-compose.yml`, `backend/migrations/`
+4. [x] **Docker Compose + Alembic baseline:** `docker-compose.yml`, `backend/migrations/`
    The first Alembic revision applies `db/schema.sql`. Add `make db-reset` (drop, migrate, seed).
    *Done when:* a fresh clone can run `docker compose up -d && make db-reset && pytest -q` with every test passing.
 
@@ -90,4 +90,4 @@ Record each real bug here as it happens: what happened, the root cause, the fix,
 
 ## Status
 
-Phase 1 is complete (steps 1–3): the schema loads cleanly and 20/20 DB tests pass against Postgres 16. Next up is step 4.
+Phase 1 is complete (steps 1–4). `docker compose up -d && make db-reset && make test` gives 22/22 passing on a fresh volume (20 DB rule tests + 2 migration tests: `alembic upgrade head` matches `db/schema.sql`, and downgrade/upgrade round-trips). Next up is step 5.
