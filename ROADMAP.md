@@ -55,9 +55,9 @@ Rules for every step:
 
 14. [x] **Scaffold + API client + auth flow:** `frontend/` (`b0ba480..9944012`)
     Login → agency picker (for multi-agency users) → app. Separate route trees: `/` for staff and `/portal` for clients. The token is held in memory or an httpOnly cookie, not localStorage.
-15. [x] **Staff screens**
+15. [x] **Staff screens** (`bf04883..2b135cc`)
     Project list, task board grouped by status, task drawer (comments with the visibility toggle, files, time log), project members, invites.
-16. [ ] **Portal screens**
+16. [x] **Portal screens**
     My projects, client-visible tasks, commenting, approve / request changes on files, dashboard.
 
 ## Phase 4: Ship
@@ -91,5 +91,5 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 
 - Phase 1 complete (steps 1–4).
 - Phase 2 complete (steps 5–13). 154 backend tests passing (26 DB rules, 2 migrations, 126 API).
-- Phase 3: steps 14–15 complete. 157 backend tests, 35 frontend tests; `make check` runs everything.
-- Next: step 16 (portal screens).
+- Phase 3 complete (steps 14–16). 157 backend tests, 40 frontend tests; `make check` runs everything.
+- Next: step 17 (README + DESIGN.md final pass).
