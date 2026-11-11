@@ -57,12 +57,12 @@ Rules for every step:
     Login → agency picker (for multi-agency users) → app. Separate route trees: `/` for staff and `/portal` for clients. The token is held in memory or an httpOnly cookie, not localStorage.
 15. [x] **Staff screens** (`bf04883..2b135cc`)
     Project list, task board grouped by status, task drawer (comments with the visibility toggle, files, time log), project members, invites.
-16. [x] **Portal screens**
+16. [x] **Portal screens** (`7af83ba..32aa4ae`)
     My projects, client-visible tasks, commenting, approve / request changes on files, dashboard.
 
 ## Phase 4: Ship
 
-17. [ ] **README + DESIGN.md final pass**
+17. [x] **README + DESIGN.md final pass**
     README.md is drafted (setup, demo accounts, tests, layout, status) and DESIGN.md is trimmed to half a page. Final pass: add frontend setup, re-check the 10-minute setup from a fresh clone, and update Status.
 18. [ ] **Walkthrough video (3–5 min)**
     Covers the app, the schema and the isolation tests.
@@ -92,4 +92,5 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 - Phase 1 complete (steps 1–4).
 - Phase 2 complete (steps 5–13). 154 backend tests passing (26 DB rules, 2 migrations, 126 API).
 - Phase 3 complete (steps 14–16). 157 backend tests, 40 frontend tests; `make check` runs everything.
-- Next: step 17 (README + DESIGN.md final pass).
+- Phase 4: step 17 complete. Fresh-clone setup + `make check` verified (about 1.5 min with warm caches).
+- Next: step 18 (walkthrough video).
