@@ -1,6 +1,6 @@
 # AgencyDesk — Roadmap
 
-Build order for the Sapyon take-home. As with the reconciliation engine, each step below is implemented and committed separately, in this order. Each step must be runnable and testable before moving to the next. Tick the box and fill in the commit hash when a step lands.
+Build order. Each step below is implemented and committed separately, in this order. Each step must be runnable and testable before moving to the next. Tick the box and fill in the commit hash when a step lands.
 
 Rules for every step:
 - One step = one commit, with a message in the form `Implement <thing>` / `Add <thing>` / `Fix <thing>`.
@@ -9,7 +9,7 @@ Rules for every step:
 
 ---
 
-## Phase 1: Database (the part that's graded hardest)
+## Phase 1: Database
 
 1. [x] **Schema, RLS policies, triggers and functions:** [db/schema.sql](db/schema.sql)
    Standalone; loads into any Postgres 15+ with `psql -f`.
@@ -23,11 +23,11 @@ Rules for every step:
 
 ## Phase 2: Backend (FastAPI)
 
-5. [x] **App skeleton + `get_tenant_db`:** `backend/app/main.py`, `backend/app/db.py`, `backend/app/config.py`
+5. [x] **App skeleton + `get_tenant_db`:** `backend/app/main.py`, `backend/app/db.py`, `backend/app/config.py` (`a9fe9da`)
    This is the single place that sets `SET LOCAL ROLE` and the `app.*` context. Also add a `GET /health` endpoint.
    *Test:* after a request finishes, the next transaction on the same pooled connection sees an empty `app.agency_id`. This proves no context leaks between requests.
-6. [ ] **Auth: login, agency selection, `/me`:** `backend/app/auth/`
-   bcrypt hashing, plus real hashes in the seed (replace the placeholder). Endpoints: `POST /auth/login`, `POST /auth/session`, `GET /me`. Staff and portal logins each list only their kind of membership.
+6. [x] **Auth: login, agency selection, `/me`:** `backend/app/auth/`
+   bcrypt hashing, plus real hashes in the seed (replace the placeholder). Endpoints: `POST /auth/login`, `POST /auth/portal/login`, `POST /auth/session`, `GET /me`. Staff and portal logins each list only their kind of membership.
    *Tests:* Ravi logs in once and sees two memberships; the session token works only for the chosen agency; a removed membership gets 401 on the next request.
 7. [ ] **Invites:** `routers/invites.py`, `services/invites.py`
    Create, resend (upsert), revoke, and accept (through `app.accept_invite` as `agencydesk_auth`). Accepting as an existing user requires being logged in as that email.
@@ -63,15 +63,9 @@ Rules for every step:
 ## Phase 4: Ship
 
 17. [ ] **README + DESIGN.md final pass**
-    Setup in under 10 minutes, a table of demo logins (one per role, plus Ravi), and how to run the tests. Trim DESIGN.md to about half a page.
-18. [ ] **Freeze + Loom video (3–5 min)**
-    Suggested walkthrough:
-    - schema diagram and composite foreign keys (60s)
-    - RLS + `get_tenant_db` (60s)
-    - live demo: Ravi in two agencies, client portal hiding internal content, removing a member (90s)
-    - run the tests (30s)
-
-    Submissions without a video aren't reviewed.
+    README.md is drafted (setup, demo accounts, tests, layout, status) and DESIGN.md is trimmed to half a page. Final pass: add frontend setup, re-check the 10-minute setup from a fresh clone, and update Status.
+18. [ ] **Walkthrough video (3–5 min)**
+    Covers the app, the schema and the isolation tests.
 
 ### Bonus (only after step 18 is done)
 
@@ -82,15 +76,15 @@ Rules for every step:
 
 ## Bugs found during the build
 
-Record each real bug here as it happens: what happened, the root cause, the fix, and the commit. As with the `LazyInitializationException` in the reconciliation engine, each one doubles as an interview answer to "tell me about a bug you hit".
+Each real bug found while building: what happened, the root cause, the fix, and the commit.
 
 | # | Step | Symptom | Root cause | Fix (commit) |
 |---|---|---|---|---|
 | 1 | 3 | `app.accept_invite` failed: "column reference agency_id is ambiguous" | The function's `RETURNS TABLE` output columns share names with table columns, and PL/pgSQL can't tell which one `ON CONFLICT (agency_id, user_id)` means | Renamed the outputs to `out_*` and used `ON CONFLICT ON CONSTRAINT agency_memberships_pkey` |
-| 2 | 5 | Designing `get_tenant_db`: a `client_user` (e.g. Ravi) could never authenticate when the membership lookup ran as `agencydesk_api` | Chicken-and-egg: RLS hides membership rows until `app.role` / `app.client_id` are set, but those values *come from* the membership row. Staff rows happened to be visible (`is_staff` branch), client rows weren't. The tests hid this because they look up memberships as `postgres` | Added `OR user_id = app.user_id()` to the `agency_memberships` read policy (migration 0002), so the lookup stays under RLS instead of using a BYPASSRLS role. A test fails if the branch is removed (step 5 commit) |
+| 2 | 5 | `client_user` memberships not found by `get_tenant_db` (401 for every client) | `agency_memberships` read policy needs `app.client_id`, which is only known after the lookup; DB tests missed it because they look up as `postgres` | Own-row branch `OR user_id = app.user_id()` in the read policy, migration 0002 (`a9fe9da`) |
 
 ## Status
 
-Phase 1 is complete (steps 1–4). `docker compose up -d && make db-reset && make test` gives 22/22 passing on a fresh volume (20 DB rule tests + 2 migration tests: `alembic upgrade head` matches `db/schema.sql`, and downgrade/upgrade round-trips).
-
-Step 5 is done: 40/40 tests pass. The 18 new API tests in `tests/test_api.py` cover token checks, membership re-load, RLS-scoped queries, Ravi in two agencies, and no context leaking through the connection pool (including after a failed request). Next up is step 6.
+- Phase 1 complete (steps 1–4).
+- Phase 2: steps 5–6 complete. 56 tests passing (20 DB rules, 2 migrations, 34 API).
+- Next: step 7 (invites).

@@ -1,12 +1,22 @@
 # AGENTS.md — AgencyDesk
 
-Instructions for coding agents working in this repo. Read this file fully before changing anything. For the reasoning behind every rule, see `docs/design-notes.md`. `DESIGN.md` is the submitted summary.
+Instructions for coding agents working in this repo. Read this file fully before changing anything. `DESIGN.md` explains the reasoning behind the isolation rules. `README.md` is the public setup guide for people running the project.
 
 ## What this project is
 
 AgencyDesk is a multi-tenant client and project management app. One deployment serves many agencies. Each agency manages its own clients, projects, tasks, files and time entries, and invites clients into a portal.
 
-This is a take-home assignment that is graded mainly on **tenant isolation, access control correctness and schema design**, not on how many screens exist. Correctness beats features. When unsure, choose the more restrictive behaviour.
+The priority is **tenant isolation, access control correctness and schema design**, not how many screens exist. Correctness beats features. When unsure, choose the more restrictive behaviour.
+
+## How to work through the build
+
+Follow `ROADMAP.md` in order:
+- Do **one step per task and one commit per step**, with a message like `Implement <thing>`.
+- Don't start a step until the previous one is runnable and its tests pass.
+- When a step lands, tick its box, add the commit hash, and update the Status section.
+- In the same commit, update `README.md` if the step changed setup, `make` commands, environment variables, endpoints, demo accounts, the project layout or the Status section.
+- If you hit a real bug, add a row to "Bugs found during the build".
+- Don't jump ahead to later steps or bonus items unless asked.
 
 ## Stack
 
@@ -30,7 +40,9 @@ backend/app/
   schemas/               # Pydantic models; separate Staff* and Client* response models
 backend/migrations/      # Alembic; the first revision applies db/schema.sql
 frontend/
-docs/design-notes.md
+README.md                # setup, demo accounts, tests, layout, status (keep current)
+DESIGN.md                # required design write-up (keep to about half a page)
+ROADMAP.md               # build order + status
 ```
 
 Some of `backend/` and `frontend/` may not exist yet. Create them following this layout.
@@ -121,13 +133,21 @@ A change is done only when:
   - another tenant gets **404** for it, by ID
   - a `client_user` can't see or change internal content through it, including via `?q=` search and filter params
   - the role rules in the table above hold
-- New behaviour on the five graded edge cases has a test named after the edge case:
+- New behaviour on the five key edge cases has a test named after the edge case:
   - cross-tenant access
   - internal content leaking to clients
   - one person in two agencies
   - invite races
   - removing a member mid-task
 - Never mock the database to test access rules. Their whole point is that Postgres enforces them.
+
+## README rules
+
+- Setup must stay under 10 minutes from a fresh clone. If a step adds a dependency or setup command (e.g. the frontend), add it to "Run it" and check that it still works from a clean checkout.
+- The demo accounts table must match `db/seed.sql`.
+- The "Status" section describes only what actually works. Don't list unbuilt features as done.
+- Don't edit the "How I used AI" section; the author maintains it.
+- Keep `DESIGN.md` to about half a page. Put setup details in the README, not in DESIGN.md.
 
 ## Code style
 
@@ -136,7 +156,7 @@ A change is done only when:
 - Pydantic: separate input models (`TaskCreate`, `TaskUpdate`) and output models (`StaffTask`, `ClientTask`). Never return ORM rows or dicts directly.
 - **Errors:** map RLS denial (`InsufficientPrivilege`) to 403 on writes. Map not-found-under-RLS to 404. Map unique/FK violations to 409/422 with a safe message that never echoes another tenant's data.
 - **Frontend:** TypeScript strict mode. Put the API client in one module, and keep staff and portal pages separate. The UI hiding something is never the security boundary; the backend must enforce every rule.
-- Keep the code readable over clever; the reviewer will ask you to explain it in an interview.
+- Keep the code readable over clever.
 
 ## Don't
 
@@ -147,6 +167,7 @@ A change is done only when:
 - Don't introduce a second way to set request context, a global DB session, or a module-level connection.
 - Don't add features outside scope (CRM, invoicing, Gantt build) unless asked. Bonus items (intake forms, notifications) come only after the required scope and tests are done.
 - Don't commit `.env`, real secrets or uploaded files.
+- Don't add `Co-Authored-By` trailers or tool attribution lines to commit messages.
 
 ## When in doubt
 
