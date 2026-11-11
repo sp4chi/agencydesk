@@ -1,0 +1,68 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2430;
+  --muted: #5d6878;
+  --border: #dde2e9;
+  --accent: #2f5bd3;
+  --accent-text: #ffffff;
+  --error: #b42318;
+  --radius: 8px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --surface: #1b2129;
+    --text: #e6eaf0;
+    --muted: #9aa5b4;
+    --border: #2d3540;
+    --accent: #6b8ff0;
+    --accent-text: #0d1117;
+    --error: #f97066;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+.muted { color: var(--muted); }
+.error { color: var(--error); margin: 0; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+}
+
+.auth-page { display: grid; place-items: center; min-height: 100vh; padding: 1rem; }
+.auth-card { width: 100%; max-width: 380px; display: grid; gap: 0.9rem; }
+
+label { display: grid; gap: 0.3rem; font-size: 0.9rem; }
+input {
+  font: inherit; padding: 0.55rem 0.65rem; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg); color: var(--text);
+}
+button {
+  font: inherit; padding: 0.55rem 0.9rem; border: none; border-radius: 6px;
+  background: var(--accent); color: var(--accent-text); cursor: pointer;
+}
+button:disabled { opacity: 0.6; cursor: default; }
+.link-button { background: none; color: var(--accent); padding: 0; }
+
+.choice-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.choice {
+  width: 100%; display: grid; gap: 0.2rem; text-align: left;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+}
+
+.app-header {
+  display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+  padding: 0.8rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.header-actions { display: flex; gap: 1rem; align-items: center; }
+.page { padding: 1.5rem 1.25rem; max-width: 1100px; margin: 0 auto; }
