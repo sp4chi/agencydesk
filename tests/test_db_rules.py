@@ -33,6 +33,7 @@ TASK_NW_SECRET = "bbbbbbbb-0000-0000-0003-000000000001"   # other tenant
 FILE_CLIENT = "aaaaaaaa-0000-0000-0004-000000000001"
 FILE_INTERNAL = "aaaaaaaa-0000-0000-0004-000000000002"
 NINA = "00000000-0000-0000-0000-0000000000a3"
+MARK = "00000000-0000-0000-0000-0000000000a2"
 
 
 # ---------------------------------------------------------------- fixtures
@@ -248,7 +249,7 @@ def test_concurrent_double_accept_creates_exactly_one_account():
             c.execute("SET ROLE agencydesk_auth")
             barrier.wait()
             try:
-                c.execute("SELECT * FROM app.accept_invite(%s, 'Racer', 'x')",
+                c.execute("SELECT * FROM app.accept_invite(%s, NULL, 'Racer', 'x')",
                           (hashlib.sha256(token.encode()).hexdigest(),))
                 c.commit()
                 results.append("ok")
@@ -270,13 +271,56 @@ def test_accepting_invite_as_existing_user_adds_membership_not_account(conn):
                     VALUES (%s, 'mark@pixel.test', 'client_user', 'bbbbbbbb-0000-0000-0001-000000000001',
                             'h-mark', '00000000-0000-0000-0000-0000000000b1', now() + interval '1 day')""",
                  (NORTHWIND,))
+    hash_before = conn.execute(
+        "SELECT password_hash FROM users WHERE email = 'mark@pixel.test'").fetchone()[0]
     conn.execute("SET LOCAL ROLE agencydesk_auth")
-    conn.execute("SELECT * FROM app.accept_invite('h-mark', 'ignored', 'ignored')")
+    # Mark is logged in (acting user = Mark), so his existing account is attached.
+    conn.execute("SELECT * FROM app.accept_invite('h-mark', %s, 'ignored', 'ignored')", (MARK,))
     conn.execute("RESET ROLE")
     assert conn.execute("SELECT count(*) FROM users WHERE email = 'mark@pixel.test'").fetchone()[0] == 1
     roles = dict(conn.execute("""SELECT agency_id::text, role FROM agency_memberships
                                  WHERE user_id = '00000000-0000-0000-0000-0000000000a2'""").fetchall())
     assert roles == {PIXEL: "agency_member", NORTHWIND: "client_user"}
+    # The invite's name/password never touch an existing account.
+    assert conn.execute(
+        "SELECT password_hash FROM users WHERE email = 'mark@pixel.test'").fetchone()[0] == hash_before
+
+
+def _invite_mark_to_northwind(conn, token_hash="h-mark"):
+    conn.execute("""INSERT INTO invites (agency_id, email, role, client_id, token_hash, invited_by, expires_at)
+                    VALUES (%s, 'mark@pixel.test', 'client_user', 'bbbbbbbb-0000-0000-0001-000000000001',
+                            %s, '00000000-0000-0000-0000-0000000000b1', now() + interval '1 day')""",
+                 (NORTHWIND, token_hash))
+    conn.execute("SET LOCAL ROLE agencydesk_auth")
+
+
+@pytest.mark.parametrize("acting_user", [None, "00000000-0000-0000-0000-0000000000a1"])
+def test_invite_for_existing_account_requires_being_logged_in_as_it(conn, acting_user):
+    # Not logged in, or logged in as Alice: neither may attach Mark's account.
+    _invite_mark_to_northwind(conn)
+    with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+        conn.execute("SELECT * FROM app.accept_invite('h-mark', %s, 'Evil', 'x')", (acting_user,))
+
+
+def test_invite_for_new_email_refuses_a_logged_in_other_user(conn):
+    act_as(conn, "alice@pixel.test", PIXEL)
+    _invite(conn, "brand-new@acme.test", "tok-new")
+    conn.execute("RESET ROLE")
+    conn.execute("SET LOCAL ROLE agencydesk_auth")
+    with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+        conn.execute("SELECT * FROM app.accept_invite(%s, %s, 'New', 'x')",
+                     (hashlib.sha256(b"tok-new").hexdigest(), MARK))
+
+
+@pytest.mark.parametrize("name, password_hash", [(None, "x"), ("  ", "x"), ("New", None)])
+def test_invite_for_new_email_requires_name_and_password(conn, name, password_hash):
+    act_as(conn, "alice@pixel.test", PIXEL)
+    _invite(conn, "brand-new@acme.test", "tok-new")
+    conn.execute("RESET ROLE")
+    conn.execute("SET LOCAL ROLE agencydesk_auth")
+    with pytest.raises(psycopg.errors.InvalidParameterValue):
+        conn.execute("SELECT * FROM app.accept_invite(%s, NULL, %s, %s)",
+                     (hashlib.sha256(b"tok-new").hexdigest(), name, password_hash))
 
 
 # ------------------------------------- 5. removing a member mid-task

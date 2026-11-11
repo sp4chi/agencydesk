@@ -443,11 +443,21 @@ CREATE TRIGGER tasks_assignee_log BEFORE UPDATE ON tasks
 -- Functions called by the API
 -- =====================================================================
 
--- Accept an invite exactly once. The UPDATE ... WHERE status='pending'
--- takes a row lock: if two requests race, the second waits, then sees
+-- Accept an invite exactly once. The SELECT ... FOR UPDATE takes a row
+-- lock: if two requests race, the second waits, then sees
 -- status='accepted' and matches 0 rows. users.email UNIQUE + ON CONFLICT
 -- means an existing person is reused, never duplicated.
-CREATE FUNCTION app.accept_invite(p_token_hash text, p_name text, p_password_hash text)
+--
+-- Who may accept (checked here, inside the same locked step):
+--   * the invited email already has an account -> p_acting_user must be
+--     that account (the caller logged in as it). Name/password are ignored;
+--     an invite link can never attach or change someone else's account.
+--   * no account yet -> p_acting_user must be NULL (not logged in as
+--     someone else) and p_name + p_password_hash are required.
+-- Errors: P0002 invalid/expired/used, 28000 wrong or missing login,
+--         22023 missing name/password.
+CREATE FUNCTION app.accept_invite(
+  p_token_hash text, p_acting_user uuid, p_name text, p_password_hash text)
 RETURNS TABLE (out_user_id uuid, out_agency_id uuid, out_role text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE inv invites; uid uuid;
@@ -462,10 +472,27 @@ BEGIN
     RAISE EXCEPTION 'invite is invalid, expired or already used' USING ERRCODE = 'P0002';
   END IF;
 
-  INSERT INTO users (email, name, password_hash)
-  VALUES (inv.email, p_name, p_password_hash)
-  ON CONFLICT (email) DO NOTHING;
   SELECT u.id INTO uid FROM users u WHERE u.email = inv.email;
+  IF uid IS NOT NULL THEN
+    IF p_acting_user IS DISTINCT FROM uid THEN
+      RAISE EXCEPTION 'log in as the invited account to accept' USING ERRCODE = '28000';
+    END IF;
+  ELSE
+    IF p_acting_user IS NOT NULL THEN
+      RAISE EXCEPTION 'this invite is for a different email' USING ERRCODE = '28000';
+    END IF;
+    IF coalesce(btrim(p_name), '') = '' OR coalesce(p_password_hash, '') = '' THEN
+      RAISE EXCEPTION 'name and password are required' USING ERRCODE = '22023';
+    END IF;
+    INSERT INTO users (email, name, password_hash)
+    VALUES (inv.email, btrim(p_name), p_password_hash)
+    ON CONFLICT (email) DO NOTHING
+    RETURNING id INTO uid;
+    IF uid IS NULL THEN
+      -- Someone created this account between our check and the insert.
+      RAISE EXCEPTION 'log in as the invited account to accept' USING ERRCODE = '28000';
+    END IF;
+  END IF;
 
   INSERT INTO agency_memberships (agency_id, user_id, role, client_id)
   VALUES (inv.agency_id, uid, inv.role, inv.client_id)
@@ -496,8 +523,8 @@ $$;
 -- =====================================================================
 GRANT USAGE ON SCHEMA app TO agencydesk_api, agencydesk_auth;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO agencydesk_api;
-REVOKE EXECUTE ON FUNCTION app.accept_invite(text, text, text) FROM PUBLIC, agencydesk_api;
-GRANT EXECUTE ON FUNCTION app.accept_invite(text, text, text) TO agencydesk_auth;
+REVOKE EXECUTE ON FUNCTION app.accept_invite(text, uuid, text, text) FROM PUBLIC, agencydesk_api;
+GRANT EXECUTE ON FUNCTION app.accept_invite(text, uuid, text, text) TO agencydesk_auth;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON
   clients, agency_memberships, projects, project_members, tasks,
