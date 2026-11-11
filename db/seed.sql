@@ -1,9 +1,10 @@
 -- Seed data: 2 agencies, one person (ravi) in both with different roles,
 -- a mix of internal and client-visible tasks, comments, files, time.
 -- Fixed UUIDs make the tests readable. Password for everyone: "password"
--- (bcrypt hash below is a placeholder; the real seed script hashes it).
+-- (demo accounts only). The value below is a real bcrypt hash (cost 12) of
+-- that password, so the seeded users can log in through POST /auth/login.
 
-\set pw '''$2b$12$placeholderplaceholderplaceholderplaceholderplace'''
+\set pw '''$2b$12$LoaShANnx6oAprR9OJ.zM.FwfDigathqA9iO15Y2UbeR52zSoTig6'''
 
 INSERT INTO agencies (id, name, slug) VALUES
   ('aaaaaaaa-0000-0000-0000-000000000001', 'Pixel Studio',   'pixel'),
