@@ -7,7 +7,9 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { RequireSession } from "./auth/RequireSession";
 import { SessionProvider } from "./auth/SessionProvider";
-import { PortalHome } from "./portal/PortalHome";
+import { PortalLayout } from "./portal/PortalLayout";
+import { PortalProjectPage } from "./portal/PortalProjectPage";
+import { PortalProjectsPage } from "./portal/PortalProjectsPage";
 import { AcceptInvitePage } from "./shared/AcceptInvitePage";
 import { AgencyPicker } from "./shared/AgencyPicker";
 import { LoginPage } from "./shared/LoginPage";
@@ -35,7 +37,10 @@ export function App() {
           {/* Client portal */}
           <Route path="/portal/login" element={<LoginPage kind="client" />} />
           <Route path="/portal/select-agency" element={<AgencyPicker kind="client" />} />
-          <Route path="/portal" element={<RequireSession kind="client"><PortalHome /></RequireSession>} />
+          <Route path="/portal" element={<RequireSession kind="client"><PortalLayout /></RequireSession>}>
+            <Route index element={<PortalProjectsPage />} />
+            <Route path="projects/:projectId" element={<PortalProjectPage />} />
+          </Route>
 
           <Route path="/portal/*" element={<Navigate to="/portal" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -156,6 +156,8 @@ a { color: var(--accent); }
 .segmented label { display: flex; gap: 0.35rem; align-items: center; }
 .invite-link { display: grid; gap: 0.5rem; }
 .composer button, .invite-link button { justify-self: start; }
+.drawer-title { font-size: 1.25rem; margin: 0 4rem 0.5rem 0; }
+.description { white-space: pre-wrap; }
 .invite-link input { width: 100%; }
 
 @media (max-width: 720px) {
