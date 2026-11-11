@@ -11,8 +11,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from app.auth.db import create_auth_engine
 from app.config import Settings
 from app.db import create_api_engine
+from app.routers import auth, me
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -22,12 +24,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
         app.state.api_engine.dispose()
+        app.state.auth_engine.dispose()
 
     app = FastAPI(title="AgencyDesk", lifespan=lifespan)
-    # Engine lives on the app, not at module level, so tests can build an
+    # Engines live on the app, not at module level, so tests can build an
     # app against their own database.
     app.state.settings = settings
-    app.state.api_engine = create_api_engine(settings)
+    app.state.api_engine = create_api_engine(settings)    # every request (RLS applies)
+    app.state.auth_engine = create_auth_engine(settings)  # login / select agency only
+
+    app.include_router(auth.router)
+    app.include_router(me.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
