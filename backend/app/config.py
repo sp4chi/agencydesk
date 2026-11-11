@@ -14,7 +14,9 @@ MIN_SECRET_LENGTH = 32
 class Settings:
     # Pool for normal requests. Must log in as agencydesk_api (RLS applies).
     api_database_url: str
-    # HMAC key for session tokens.
+    # Pool for login / agency selection / invite acceptance only (agencydesk_auth).
+    auth_database_url: str
+    # HMAC key for identity and session tokens.
     session_secret: str
     session_ttl_seconds: int = 12 * 60 * 60
 
@@ -30,6 +32,10 @@ class Settings:
             api_database_url=os.environ.get(
                 "API_DATABASE_URL",
                 "postgresql+psycopg://agencydesk_api:dev-api-password@localhost:5433/agencydesk",
+            ),
+            auth_database_url=os.environ.get(
+                "AUTH_DATABASE_URL",
+                "postgresql+psycopg://agencydesk_auth:dev-auth-password@localhost:5433/agencydesk",
             ),
             session_secret=secret,
             session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", 12 * 60 * 60)),
