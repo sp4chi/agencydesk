@@ -29,10 +29,10 @@ Rules for every step:
 6. [x] **Auth: login, agency selection, `/me`:** `backend/app/auth/` (`aaa5cef..b347cd9`)
    bcrypt hashing, plus real hashes in the seed (replace the placeholder). Endpoints: `POST /auth/login`, `POST /auth/portal/login`, `POST /auth/session`, `GET /me`. Staff and portal logins each list only their kind of membership.
    *Tests:* Ravi logs in once and sees two memberships; the session token works only for the chosen agency; a removed membership gets 401 on the next request.
-7. [x] **Invites:** `routers/invites.py`, `services/invites.py`
+7. [x] **Invites:** `routers/invites.py`, `services/invites.py` (`91fa0cb..fc0f87e`)
    Create, resend (upsert), revoke, and accept (through `app.accept_invite` as `agencydesk_auth`). Accepting as an existing user requires being logged in as that email.
    *Tests:* resend makes no duplicate and the old link stops working; two simultaneous accepts over HTTP produce one account; a non-admin gets 403.
-8. [ ] **Clients, projects, project members:** `routers/projects.py`
+8. [x] **Clients, projects, project members:** `routers/projects.py`
    Admin writes; reads are scoped by RLS.
    *Tests:* another tenant gets 404 by ID; a member sees only assigned projects; `DELETE /projects/{id}/members/{uid}` unassigns that person's tasks and logs the event, checked over HTTP.
 9. [ ] **Tasks: list/filter/search, create, update:** `routers/tasks.py`, `schemas/tasks.py`
@@ -84,9 +84,10 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 | 2 | 5 | `client_user` memberships not found by `get_tenant_db` (401 for every client) | `agency_memberships` read policy needs `app.client_id`, which is only known after the lookup; DB tests missed it because they look up as `postgres` | Own-row branch `OR user_id = app.user_id()` in the read policy, migration 0002 (`a9fe9da`) |
 | 3 | 7 | Anyone holding an invite link could attach an existing account to the agency without that user logging in | `app.accept_invite` reused an existing user on `ON CONFLICT (email)` with no check on who was accepting | `p_acting_user` parameter; existing account requires the caller to be logged in as it, checked inside the locked step (migration 0003) |
 | 4 | 7 | `alembic upgrade` failed: "value too long for type character varying(32)" | Revision ID `0003_accept_invite_requires_login` exceeds `alembic_version.version_num` length | Shortened the revision ID to `0003_accept_invite_login` |
+| 5 | 8 | DB rule tests failed after the API tests ran (unexpected projects/tasks in seed data) | API tests commit through the real endpoints, and all test modules share one `ad_test` database | `test_api.py` rebuilds `ad_test` from schema + seed when the module finishes (`build_test_database`) |
 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2: steps 5–7 complete. 82 tests passing (26 DB rules, 2 migrations, 54 API).
-- Next: step 8 (clients, projects, project members).
+- Phase 2: steps 5–8 complete. 94 tests passing (26 DB rules, 2 migrations, 66 API).
+- Next: step 9 (tasks: list/filter/search, create, update).
