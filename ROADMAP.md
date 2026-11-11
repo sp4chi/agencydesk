@@ -32,10 +32,10 @@ Rules for every step:
 7. [x] **Invites:** `routers/invites.py`, `services/invites.py` (`91fa0cb..fc0f87e`)
    Create, resend (upsert), revoke, and accept (through `app.accept_invite` as `agencydesk_auth`). Accepting as an existing user requires being logged in as that email.
    *Tests:* resend makes no duplicate and the old link stops working; two simultaneous accepts over HTTP produce one account; a non-admin gets 403.
-8. [x] **Clients, projects, project members:** `routers/projects.py`
+8. [x] **Clients, projects, project members:** `routers/projects.py` (`ca1ccf7..197ed79`)
    Admin writes; reads are scoped by RLS.
    *Tests:* another tenant gets 404 by ID; a member sees only assigned projects; `DELETE /projects/{id}/members/{uid}` unassigns that person's tasks and logs the event, checked over HTTP.
-9. [ ] **Tasks: list/filter/search, create, update:** `routers/tasks.py`, `schemas/tasks.py`
+9. [x] **Tasks: list/filter/search, create, update:** `routers/tasks.py`, `schemas/tasks.py`
    Use separate `StaffTask` and `ClientTask` response models. Support `?status=&priority=&assignee=&q=`.
    *Tests:* a client using `?q=` or `?status=` never gets an internal task; a client's create or status change fails; assigning someone outside the project gets 422.
 10. [ ] **Comments:** `routers/comments.py`
@@ -89,5 +89,5 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2: steps 5–8 complete. 94 tests passing (26 DB rules, 2 migrations, 66 API).
-- Next: step 9 (tasks: list/filter/search, create, update).
+- Phase 2: steps 5–9 complete. 110 tests passing (26 DB rules, 2 migrations, 82 API).
+- Next: step 10 (comments).
