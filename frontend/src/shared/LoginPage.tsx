@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../api/client";
 import type { LoginKind } from "../api/types";
@@ -11,9 +11,23 @@ const TITLES: Record<LoginKind, { title: string; other: string; otherPath: strin
   client: { title: "AgencyDesk client portal", other: "Agency staff? Go to the staff app", otherPath: ROUTES.staff.login },
 };
 
+interface LoginState {
+  /** Where to go after signing in. Only invite links are allowed (no open redirect). */
+  returnTo?: string;
+  notice?: string;
+}
+
+export function safeReturnTo(state: unknown): string | null {
+  const returnTo = (state as LoginState | null)?.returnTo;
+  return typeof returnTo === "string" && returnTo.startsWith("/invite#") ? returnTo : null;
+}
+
 export function LoginPage({ kind }: { kind: LoginKind }) {
   const { login } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = safeReturnTo(location.state);
+  const notice = (location.state as LoginState | null)?.notice;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +40,7 @@ export function LoginPage({ kind }: { kind: LoginKind }) {
     setBusy(true);
     try {
       const started = await login(kind, email, password);
-      navigate(started ? ROUTES[kind].home : ROUTES[kind].selectAgency, { replace: true });
+      navigate(returnTo ?? (started ? ROUTES[kind].home : ROUTES[kind].selectAgency), { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the server. Please try again.");
     } finally {
@@ -38,6 +52,8 @@ export function LoginPage({ kind }: { kind: LoginKind }) {
     <main className="auth-page">
       <form className="card auth-card" onSubmit={onSubmit} aria-labelledby="login-title">
         <h1 id="login-title">{text.title}</h1>
+        {notice && <p className="notice" role="status">{notice}</p>}
+        {returnTo && <p className="muted small">Sign in to accept your invite.</p>}
         <label>
           Email
           <input type="email" autoComplete="username" required value={email}
