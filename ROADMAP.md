@@ -53,9 +53,9 @@ Rules for every step:
 
 ## Phase 3: Frontend (React + TS + Vite)
 
-14. [x] **Scaffold + API client + auth flow:** `frontend/`
+14. [x] **Scaffold + API client + auth flow:** `frontend/` (`b0ba480..9944012`)
     Login → agency picker (for multi-agency users) → app. Separate route trees: `/` for staff and `/portal` for clients. The token is held in memory or an httpOnly cookie, not localStorage.
-15. [ ] **Staff screens**
+15. [x] **Staff screens**
     Project list, task board grouped by status, task drawer (comments with the visibility toggle, files, time log), project members, invites.
 16. [ ] **Portal screens**
     My projects, client-visible tasks, commenting, approve / request changes on files, dashboard.
@@ -85,10 +85,11 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 | 3 | 7 | Anyone holding an invite link could attach an existing account to the agency without that user logging in | `app.accept_invite` reused an existing user on `ON CONFLICT (email)` with no check on who was accepting | `p_acting_user` parameter; existing account requires the caller to be logged in as it, checked inside the locked step (migration 0003) |
 | 4 | 7 | `alembic upgrade` failed: "value too long for type character varying(32)" | Revision ID `0003_accept_invite_requires_login` exceeds `alembic_version.version_num` length | Shortened the revision ID to `0003_accept_invite_login` |
 | 5 | 8 | DB rule tests failed after the API tests ran (unexpected projects/tasks in seed data) | API tests commit through the real endpoints, and all test modules share one `ad_test` database | `test_api.py` rebuilds `ad_test` from schema + seed when the module finishes (`build_test_database`) |
+| 6 | 15 | Task drawer: "Saved" confirmation never appeared after saving | The details form was keyed on `updated_at`, so the reload after a save remounted it and dropped its state | Key the form on task id only; after a save, load the server's returned task into the form |
 
 ## Status
 
 - Phase 1 complete (steps 1–4).
 - Phase 2 complete (steps 5–13). 154 backend tests passing (26 DB rules, 2 migrations, 126 API).
-- Phase 3: step 14 complete. 22 frontend tests passing; `make check` runs everything.
-- Next: step 15 (staff screens).
+- Phase 3: steps 14–15 complete. 157 backend tests, 35 frontend tests; `make check` runs everything.
+- Next: step 16 (portal screens).
