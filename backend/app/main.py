@@ -17,7 +17,8 @@ from app.auth.db import create_auth_engine
 from app.config import Settings
 from app.db import create_api_engine
 from app.errors import ServiceError
-from app.routers import auth, clients, comments, invites, me, projects, tasks
+from app.routers import auth, clients, comments, files, invites, me, projects, tasks
+from app.services.storage import LocalDiskStorage
 
 INSUFFICIENT_PRIVILEGE = "42501"  # includes "new row violates row-level security policy"
 
@@ -37,6 +38,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.api_engine = create_api_engine(settings)    # every request (RLS applies)
     app.state.auth_engine = create_auth_engine(settings)  # login / select agency / accept invite
+    # Uploaded files. Not mounted as static files: bytes only leave through
+    # GET /files/{id}/download, after an RLS-checked lookup.
+    app.state.storage = LocalDiskStorage(settings.upload_dir)
 
     @app.exception_handler(ServiceError)
     def service_error(_: Request, exc: ServiceError) -> JSONResponse:
@@ -61,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects.router)
     app.include_router(tasks.router)
     app.include_router(comments.router)
+    app.include_router(files.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

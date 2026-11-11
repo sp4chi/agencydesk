@@ -46,12 +46,22 @@ def restore_seed_afterwards():
     build_test_database()
 
 
+MAX_TEST_UPLOAD = 64 * 1024
+
+
 @pytest.fixture(scope="module")
-def app() -> FastAPI:
+def upload_dir(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
+    return tmp_path_factory.mktemp("uploads")
+
+
+@pytest.fixture(scope="module")
+def app(upload_dir: pathlib.Path) -> FastAPI:
     settings = Settings(
         api_database_url=api_database_url(),
         auth_database_url=auth_database_url(),
         session_secret=SECRET,
+        upload_dir=upload_dir,
+        max_upload_bytes=MAX_TEST_UPLOAD,
     )
     app = create_app(settings)
     # One pooled connection, so consecutive requests provably reuse it.
@@ -1051,3 +1061,199 @@ def test_member_cannot_comment_on_projects_they_are_not_on(client: TestClient, m
 def test_bad_comment_input_is_422(client: TestClient, mark: dict, payload: dict) -> None:
     resp = client.post(f"/tasks/{TASK_MOCKUPS}/comments", headers=mark, json=payload)
     assert resp.status_code == 422
+
+
+# ===================================================== step 11: files
+FILE_CLIENT = "aaaaaaaa-0000-0000-0004-000000000001"     # on Mockups, client-visible (no bytes on disk)
+FILE_INTERNAL = "aaaaaaaa-0000-0000-0004-000000000002"   # on Mockups, internal (no bytes on disk)
+CLIENT_FILE_FIELDS = {"id", "task_id", "filename", "content_type", "size_bytes",
+                      "approval_status", "reviewed_at", "created_at"}
+
+
+def upload(client: TestClient, headers: dict, task_id: str, content: bytes = b"hello file",
+           filename: str = "notes.txt", content_type: str = "text/plain", visibility: str | None = None):
+    data = {} if visibility is None else {"visibility": visibility}
+    return client.post(f"/tasks/{task_id}/files", headers=headers, data=data,
+                       files={"file": (filename, content, content_type)})
+
+
+def stored_file_count(upload_dir: pathlib.Path) -> int:
+    return sum(1 for path in upload_dir.rglob("*") if path.is_file())
+
+
+def test_internal_content_leaking_to_clients_via_files(client: TestClient, ravi: dict, alice: dict) -> None:
+    listed = client.get(f"/tasks/{TASK_MOCKUPS}/files", headers=ravi)
+    assert [f["filename"] for f in listed.json()] == ["homepage-v2.fig"]
+    assert all(set(f) == CLIENT_FILE_FIELDS for f in listed.json())
+    assert client.get(f"/files/{FILE_INTERNAL}", headers=ravi).status_code == 404
+    assert client.get(f"/files/{FILE_INTERNAL}/download", headers=ravi).status_code == 404
+    assert client.post(f"/files/{FILE_INTERNAL}/review", headers=ravi,
+                       json={"decision": "approved"}).status_code == 404
+    assert client.get(f"/tasks/{TASK_BUDGET}/files", headers=ravi).status_code == 404
+    # Staff see both, and nobody ever gets the storage path.
+    staff = client.get(f"/tasks/{TASK_MOCKUPS}/files", headers=alice)
+    assert {f["filename"] for f in staff.json()} >= {"homepage-v2.fig", "internal-notes.pdf"}
+    assert "storage_key" not in staff.text and "pixel/f2" not in staff.text
+
+
+def test_client_cannot_download_internal_file_by_id(client: TestClient, mark: dict, ravi: dict) -> None:
+    secret = b"internal pricing: do not share"
+    file_id = upload(client, mark, TASK_MOCKUPS, secret, "pricing.txt").json()["id"]
+    assert client.get(f"/files/{file_id}/download", headers=mark).content == secret
+    resp = client.get(f"/files/{file_id}/download", headers=ravi)
+    assert resp.status_code == 404 and secret not in resp.content
+    assert client.get(f"/files/{file_id}", headers=ravi).status_code == 404
+
+
+def test_upload_and_download_client_visible_file(client: TestClient, mark: dict, ravi: dict) -> None:
+    content = b"%PDF-1.7 pretend brief"
+    resp = upload(client, mark, TASK_MOCKUPS, content, "Brief ü v1.pdf", "application/pdf", "client")
+    assert resp.status_code == 201
+    body = resp.json()
+    assert (body["visibility"], body["visible_to_client"], body["size_bytes"], body["uploaded_by"]) == (
+        "client", True, len(content), str(MARK))
+    assert body["id"] in [f["id"] for f in client.get(f"/tasks/{TASK_MOCKUPS}/files", headers=ravi).json()]
+
+    download = client.get(f"/files/{body['id']}/download", headers=ravi)
+    assert download.status_code == 200 and download.content == content
+    assert download.headers["content-disposition"].startswith("attachment;")
+    assert "filename*=UTF-8''Brief%20%C3%BC%20v1.pdf" in download.headers["content-disposition"]
+    assert download.headers["x-content-type-options"] == "nosniff"
+    assert download.headers["content-security-policy"] == "sandbox"
+    # A quote in the name can't break out of the header.
+    client.patch(f"/files/{body['id']}", headers=mark, json={"filename": 'a"b.pdf'})
+    disposition = client.get(f"/files/{body['id']}/download", headers=ravi).headers["content-disposition"]
+    assert disposition == "attachment; filename=\"a'b.pdf\"; filename*=UTF-8''a%22b.pdf"
+
+
+def test_html_upload_is_never_served_inline(client: TestClient, mark: dict) -> None:
+    file_id = upload(client, mark, TASK_MOCKUPS, b"<script>alert(1)</script>", "x.html",
+                     "text/html").json()["id"]
+    resp = client.get(f"/files/{file_id}/download", headers=mark)
+    assert resp.headers["content-disposition"].startswith("attachment;")
+    assert resp.headers["content-security-policy"] == "sandbox"
+
+
+def test_client_cannot_upload(client: TestClient, ravi: dict, upload_dir: pathlib.Path) -> None:
+    before = stored_file_count(upload_dir)
+    assert upload(client, ravi, TASK_MOCKUPS, visibility="client").status_code == 403
+    assert stored_file_count(upload_dir) == before
+
+
+def test_client_can_review_only_client_visible_files(
+    client: TestClient, ravi: dict, mark: dict, alice: dict,
+) -> None:
+    file_id = upload(client, mark, TASK_MOCKUPS, visibility="client").json()["id"]
+    approved = client.post(f"/files/{file_id}/review", headers=ravi, json={"decision": "approved"})
+    assert approved.status_code == 200
+    assert approved.json()["approval_status"] == "approved" and approved.json()["reviewed_at"]
+    staff_view = client.get(f"/files/{file_id}", headers=alice).json()
+    assert (staff_view["reviewed_by"], staff_view["reviewed_by_name"]) == (str(RAVI), "Ravi (in both)")
+    # Changing their mind is allowed.
+    assert client.post(f"/files/{file_id}/review", headers=ravi,
+                       json={"decision": "changes_requested"}).json()["approval_status"] == "changes_requested"
+
+    internal_file = upload(client, mark, TASK_MOCKUPS).json()["id"]                     # internal file
+    on_internal_task = upload(client, mark, TASK_BUDGET, visibility="client").json()["id"]  # internal task
+    for not_visible in (internal_file, on_internal_task, FILE_INTERNAL):
+        assert client.post(f"/files/{not_visible}/review", headers=ravi,
+                           json={"decision": "approved"}).status_code == 404
+    with psycopg.connect(DSN) as admin:
+        statuses = {r[0] for r in admin.execute(
+            "SELECT approval_status FROM files WHERE id IN (%s, %s)", (internal_file, on_internal_task))}
+    assert statuses == {"pending"}
+
+
+def test_only_client_users_review_and_decision_must_be_a_decision(
+    client: TestClient, alice: dict, ravi: dict,
+) -> None:
+    assert client.post(f"/files/{FILE_CLIENT}/review", headers=alice,
+                       json={"decision": "approved"}).status_code == 403
+    for bad in ({"decision": "pending"}, {"decision": "maybe"}, {"decision": "approved", "reviewed_by": str(ALICE)}):
+        assert client.post(f"/files/{FILE_CLIENT}/review", headers=ravi, json=bad).status_code == 422
+
+
+def test_client_cannot_rename_a_file_or_change_its_visibility(client: TestClient, ravi: dict) -> None:
+    for change in ({"filename": "evil.exe"}, {"visibility": "internal"}):
+        assert client.patch(f"/files/{FILE_CLIENT}", headers=ravi, json=change).status_code == 403
+    with psycopg.connect(DSN) as admin:
+        assert admin.execute("SELECT filename, visibility FROM files WHERE id = %s",
+                             (FILE_CLIENT,)).fetchone() == ("homepage-v2.fig", "client")
+
+
+def test_staff_rename_and_visibility_rules(client: TestClient, mark: dict, ravi: dict) -> None:
+    file_id = upload(client, mark, TASK_MOCKUPS, visibility="client").json()["id"]
+    renamed = client.patch(f"/files/{file_id}", headers=mark, json={"filename": "../../x/report-final.pdf"})
+    assert renamed.json()["filename"] == "report-final.pdf"
+    assert client.patch(f"/files/{file_id}", headers=mark, json={"storage_key": "x"}).status_code == 422
+    assert client.patch(f"/files/{file_id}", headers=mark, json={"visibility": None}).status_code == 422
+
+    client.post(f"/files/{file_id}/review", headers=ravi, json={"decision": "approved"})
+    blocked = client.patch(f"/files/{file_id}", headers=mark, json={"visibility": "internal"})
+    assert blocked.status_code == 409
+
+    pending_id = upload(client, mark, TASK_MOCKUPS, visibility="client").json()["id"]
+    assert client.patch(f"/files/{pending_id}", headers=mark, json={"visibility": "internal"}).status_code == 200
+    assert client.get(f"/files/{pending_id}/download", headers=ravi).status_code == 404
+
+
+def test_flipping_task_to_internal_hides_its_files(
+    client: TestClient, mark: dict, alice: dict, ravi: dict,
+) -> None:
+    file_id = upload(client, mark, TASK_CONTENT, b"migration plan", visibility="client").json()["id"]
+    assert client.get(f"/files/{file_id}/download", headers=ravi).status_code == 200
+    client.patch(f"/tasks/{TASK_CONTENT}", headers=alice, json={"visibility": "internal"})
+    try:
+        assert client.get(f"/tasks/{TASK_CONTENT}/files", headers=ravi).status_code == 404
+        assert client.get(f"/files/{file_id}", headers=ravi).status_code == 404
+        assert client.get(f"/files/{file_id}/download", headers=ravi).status_code == 404
+        assert client.get(f"/files/{file_id}", headers=alice).json()["visible_to_client"] is False
+    finally:
+        client.patch(f"/tasks/{TASK_CONTENT}", headers=alice, json={"visibility": "client"})
+    assert client.get(f"/files/{file_id}/download", headers=ravi).status_code == 200
+
+
+def test_cross_tenant_files_are_404(client: TestClient, mark: dict) -> None:
+    file_id = upload(client, mark, TASK_MOCKUPS, b"pixel only", visibility="client").json()["id"]
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    ravi_at_northwind = session_headers(client, "ravi@acme.test", NORTHWIND, portal=True)
+    for headers in (bob, ravi_at_northwind):
+        assert client.get(f"/files/{file_id}", headers=headers).status_code == 404
+        resp = client.get(f"/files/{file_id}/download", headers=headers)
+        assert resp.status_code == 404 and b"pixel only" not in resp.content
+        assert client.get(f"/tasks/{TASK_MOCKUPS}/files", headers=headers).status_code == 404
+    assert client.post(f"/files/{file_id}/review", headers=ravi_at_northwind,
+                       json={"decision": "approved"}).status_code == 404
+    assert client.patch(f"/files/{file_id}", headers=bob, json={"filename": "x"}).status_code == 404
+    assert upload(client, bob, TASK_MOCKUPS).status_code == 404
+
+
+def test_member_cannot_use_files_on_projects_they_are_not_on(client: TestClient, mark: dict) -> None:
+    assert upload(client, mark, TASK_GLOBEX).status_code == 404
+    assert client.get(f"/tasks/{TASK_GLOBEX}/files", headers=mark).status_code == 404
+
+
+def test_upload_limits_leave_nothing_behind(client: TestClient, mark: dict, upload_dir: pathlib.Path) -> None:
+    before = stored_file_count(upload_dir)
+    assert upload(client, mark, TASK_MOCKUPS, b"").status_code == 422
+    assert upload(client, mark, TASK_MOCKUPS, b"x" * (MAX_TEST_UPLOAD + 1)).status_code == 413
+    assert stored_file_count(upload_dir) == before
+    assert upload(client, mark, TASK_MOCKUPS, b"x" * MAX_TEST_UPLOAD).status_code == 201
+
+
+def test_uploaded_filename_cannot_choose_the_storage_path(
+    client: TestClient, mark: dict, upload_dir: pathlib.Path,
+) -> None:
+    resp = upload(client, mark, TASK_MOCKUPS, b"root:x:0:0", "../../../../etc/passwd")
+    assert resp.status_code == 201 and resp.json()["filename"] == "passwd"
+    with psycopg.connect(DSN) as admin:
+        key = admin.execute("SELECT storage_key FROM files WHERE id = %s", (resp.json()["id"],)).fetchone()[0]
+    assert key.startswith(f"{PIXEL}/") and ".." not in key
+    assert (upload_dir / key).read_bytes() == b"root:x:0:0"
+    assert all(p.resolve().is_relative_to(upload_dir.resolve()) for p in upload_dir.rglob("*"))
+
+
+def test_file_row_without_stored_bytes_is_404_not_500(client: TestClient, alice: dict) -> None:
+    # Seed rows have no bytes in this test's upload dir.
+    resp = client.get(f"/files/{FILE_INTERNAL}/download", headers=alice)
+    assert resp.status_code == 404 and resp.json() == {"detail": "File content is missing"}
