@@ -27,6 +27,12 @@ export function fakeApi(overrides: Partial<Record<string, unknown>> = {}): DeepM
     files: { list: resolved([]), upload: resolved(null), update: resolved(null), download: resolved(new Blob()) },
     time: { list: resolved([]), log: resolved(null) },
     invites: { list: resolved([]), create: resolved(null), resend: resolved(null), revoke: resolved(undefined) },
+    portal: {
+      projects: { list: resolved([]), get: resolved(null), dashboard: resolved(null) },
+      tasks: { list: resolved([]), get: resolved(null) },
+      comments: { list: resolved([]), create: resolved(null) },
+      files: { list: resolved([]), download: resolved(new Blob()), review: resolved(null) },
+    },
     ...overrides,
   };
   return api as unknown as DeepMock<Api>;

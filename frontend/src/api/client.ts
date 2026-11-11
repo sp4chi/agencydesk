@@ -8,6 +8,10 @@
 // enforced by the backend (and by Postgres RLS behind it).
 
 import type {
+  ClientComment,
+  ClientFile,
+  ClientProject,
+  ClientTask,
   InviteAccepted,
   IssuedInvite,
   LoginKind,
@@ -15,6 +19,7 @@ import type {
   Me,
   ProjectDashboard,
   ProjectMember,
+  ReviewDecision,
   Role,
   SessionResponse,
   StaffClient,
@@ -218,6 +223,33 @@ export function createApi(sessionToken: string, onUnauthorized: () => void) {
         post<IssuedInvite>("/invites", { email, role, client_id: clientId }),
       resend: (id: string) => post<IssuedInvite>(`/invites/${id}/resend`),
       revoke: (id: string) => call<void>(`/invites/${id}`, { method: "DELETE" }),
+    },
+
+    // Client portal: the same endpoints, typed with the client-only shapes the
+    // backend returns to client users. Portal pages use only these.
+    portal: {
+      projects: {
+        list: () => call<ClientProject[]>("/projects"),
+        get: (id: string) => call<ClientProject>(`/projects/${id}`),
+        dashboard: (id: string) => call<ProjectDashboard>(`/projects/${id}/dashboard`),
+      },
+      tasks: {
+        // No assignee filter: the API refuses it for clients.
+        list: (projectId: string, filters: Pick<TaskFilters, "status" | "q"> = {}) =>
+          call<ClientTask[]>(`/projects/${projectId}/tasks${query(filters)}`),
+        get: (id: string) => call<ClientTask>(`/tasks/${id}`),
+      },
+      comments: {
+        list: (taskId: string) => call<ClientComment[]>(`/tasks/${taskId}/comments`),
+        // No visibility: a client's comment is always shared with the agency.
+        create: (taskId: string, body: string) => post<ClientComment>(`/tasks/${taskId}/comments`, { body }),
+      },
+      files: {
+        list: (taskId: string) => call<ClientFile[]>(`/tasks/${taskId}/files`),
+        download: (id: string) => call<Blob>(`/files/${id}/download`, { responseType: "blob" }),
+        review: (id: string, decision: ReviewDecision) =>
+          post<ClientFile>(`/files/${id}/review`, { decision }),
+      },
     },
   };
 }

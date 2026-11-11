@@ -168,3 +168,45 @@ export interface InviteAccepted {
   /** Which app to log in to next. */
   login: "staff" | "portal";
 }
+
+// -------------------------------------------------------- client portal
+// What a client_user gets back from the same endpoints: the backend's
+// Client* models, without internal fields (visibility, assignee, notes...).
+
+export interface ClientProject {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface ClientTask {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClientComment {
+  id: string;
+  body: string;
+  author_name: string;
+  created_at: string;
+}
+
+export interface ClientFile {
+  id: string;
+  task_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  approval_status: ApprovalStatus;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+export type ReviewDecision = "approved" | "changes_requested";
