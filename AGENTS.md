@@ -57,6 +57,10 @@ make db-reset    # start Postgres in Docker (host port 5433), drop + recreate `a
 make migrate     # alembic upgrade head only
 make run         # API on http://localhost:8000 (uvicorn app.main:create_app --factory)
 make test        # pytest -q; tests create/drop their own databases (ad_test*)
+make web-install # npm ci in frontend/ (Node 22+)
+make web         # frontend on http://localhost:5173; /api/* is proxied to the API on :8000
+make web-check   # frontend typecheck + vitest + production build
+make check       # make test + make web-check
 ```
 
 Defaults match `docker-compose.yml`; override with the variables in `.env.example`
@@ -66,7 +70,7 @@ The app refuses to start without a real `SESSION_SECRET`. `db/dev_roles.sql` set
 Migrations: `backend/migrations/versions/`. Revision `0001_baseline` runs a frozen copy of `db/schema.sql`.
 New schema changes go in `db/schema.sql` **and** a new revision; `tests/test_migrations.py` fails if they drift.
 
-Add the frontend commands here once they exist.
+Frontend: session tokens live in memory only (never localStorage, sessionStorage or cookies), and only `frontend/src/api/client.ts` calls `fetch`. `frontend/src/security.test.ts` enforces both.
 
 ---
 

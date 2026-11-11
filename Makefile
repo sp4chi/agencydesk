@@ -4,7 +4,7 @@ VENV   := .venv
 BIN    := $(VENV)/bin
 PSQL   := docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 -q
 
-.PHONY: install env db-up db-reset migrate seed run test
+.PHONY: install env db-up db-reset migrate seed run test web-install web web-check check
 
 install:                 ## create .venv and install backend deps
 	$(PYTHON) -m venv $(VENV)
@@ -33,3 +33,14 @@ run:                     ## start the API on http://localhost:8000 (needs .env: 
 
 test: db-up              ## run all tests (they create/drop their own databases)
 	$(BIN)/pytest -q
+
+web-install:             ## install frontend deps (exact versions from package-lock.json)
+	cd frontend && npm ci
+
+web:                     ## start the frontend on http://localhost:5173 (proxies /api to the API on :8000)
+	cd frontend && npm run dev
+
+web-check:               ## frontend: typecheck, unit tests, production build
+	cd frontend && npm run typecheck && npm test && npm run build
+
+check: test web-check    ## everything: backend tests + frontend checks
