@@ -1,13 +1,21 @@
 # AgencyDesk — Design
 
-**Tenant isolation.** Every tenant table carries `agency_id` and `UNIQUE (agency_id, id)`. Children reference parents by the pair (`tasks (agency_id, project_id) → projects (agency_id, id)`), so a row cannot point across agencies even if application code is wrong. Postgres Row-Level Security adds a `RESTRICTIVE` policy, `agency_id = app.agency_id()`, on every tenant table. The API runs as a non-owner role. In one place (`get_tenant_db`), it `SET LOCAL`s the agency, user, role and client loaded from the caller's membership. A query that forgets a filter, or guesses another tenant's UUID, gets zero rows, and the API answers 404.
+## 1. How the schema keeps agencies apart
 
-**Blocking clients from internal content.** Tasks, comments and files carry `visibility ∈ {internal, client}`, defaulting to `internal`. A child is client-visible only if both it and its task are `client`. The rule lives in RLS read policies, so list, search, filters, comments and dashboard counts all inherit it. Clients have no write policy on tasks. They may only add `client` comments, and a trigger limits their file updates to approval fields. Raw time entries are staff-only; clients get totals through `app.project_hours()`. Responses use separate `Staff*` and `Client*` models, so internal fields can't leak either.
+Every table holding agency data has an `agency_id`. A row points to its parent by agency *and* id, e.g. `tasks (agency_id, project_id) → projects (agency_id, id)`, so the database refuses to store a Northwind task under a Pixel project, even if the code has a bug.
 
-**One person, two agencies.** `users` has one row per email. `agency_memberships (agency_id, user_id, role, client_id)` holds the role in each agency. After login the user picks a membership, and the session is scoped to it. Every request re-reads the membership, so removal takes effect immediately.
+Postgres Row-Level Security (RLS) then filters every query by agency. The API connects as a database role that cannot skip RLS. At the start of each request, one function (`get_tenant_db`) tells the database who is asking (agency, user, role, client), reading this from the user's membership, never from the request. `SET LOCAL` clears it when the request ends. Guessing another agency's ID gets a 404.
 
-**Invite races.** A partial unique index allows one pending invite per (agency, email), so a resend replaces the token hash on the same row and the old link dies. `app.accept_invite` locks the invite row, so two simultaneous accepts produce exactly one account. If the email already has an account, the caller must be logged in as it, checked inside the same locked step.
+## 2. How a client is blocked from internal content
 
-**Edge case: removing a member mid-task.** `tasks (agency_id, project_id, assignee_user_id)` references `project_members` with `ON DELETE SET NULL (assignee_user_id)`. The assignee is therefore always a current project member. Removing someone unassigns only their tasks, keeps status and time entries, and a trigger logs the change.
+Tasks, comments and files have a `visibility`: `internal` (default) or `client`. A client sees a comment or file only if both it and its task are `client`, so hiding a task hides everything on it. The rule lives in RLS read policies, not in each endpoint, so lists, search, filters, downloads and dashboard counts all follow it. Clients cannot create tasks or change status; they can only post `client` comments and approve client-visible files. Time-entry notes stay internal; clients see only hour totals.
 
-All rules are proven against the real API role: in Postgres (`tests/test_db_rules.py`) and over HTTP (`tests/test_api.py`).
+## 3. One person in two agencies
+
+A person has one `users` row: one email, one password. Their access lives in `agency_memberships`, one row per agency, with their role there (and their client, for client users). Ravi, for example, is a client at both Pixel and Northwind. He logs in once, picks an agency, and gets a session valid only for that agency; switching gives a new session. Every request re-checks the membership, so removed access stops at once.
+
+## 4. Edge case I'm proud of: removing a member mid-task
+
+A task can only be assigned to a current member of its project: a foreign key from the task to `project_members` enforces it. Removing someone from a project therefore unassigns their tasks automatically (`ON DELETE SET NULL`), keeps status and logged time, and a trigger records why. No code path can leave a task assigned to someone who lost access.
+
+Invite races are handled too: a resend updates the same invite row, and accepting locks it, so two clicks create one account. Everything above is proven by tests against the real database (`tests/test_db_rules.py`, `tests/test_api.py`).

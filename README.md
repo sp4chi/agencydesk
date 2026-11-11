@@ -1,8 +1,8 @@
 # AgencyDesk
 
-A multi-tenant client and project management app for agencies. One deployment serves many agencies. Each agency manages its own clients, projects, tasks, files and time entries, and invites clients into a portal where they see only their own client-visible work.
+A project management app for agencies and their clients. Many agencies share one app, but each agency only ever sees its own data. Agency staff manage clients, projects, tasks, files and time. Clients log in to a separate portal and see only the work shared with them.
 
-The focus is **data modelling and access-control correctness**. Tenant isolation and client visibility are enforced by PostgreSQL itself, through composite foreign keys and Row-Level Security, and proven by tests. See **[DESIGN.md](DESIGN.md)** for how it works.
+The main goal is that these rules can't be broken. The database itself enforces them, and tests prove it. See **[DESIGN.md](DESIGN.md)** for how.
 
 **Stack:** PostgreSQL 16 · Python 3.12 + FastAPI + SQLAlchemy + Alembic · React + TypeScript + Vite
 
@@ -31,11 +31,11 @@ make web           # app on http://localhost:5173
 
 Open **http://localhost:5173** for the staff app, or **http://localhost:5173/portal/login** for the client portal.
 
-- **Ports:** Postgres runs on host port **5433**, so it doesn't clash with a local Postgres on 5432. The frontend forwards `/api/*` to the API, so there's no CORS to set up.
-- **Refreshing logs you out.** Session tokens are kept in memory only, never in browser storage.
-- **Resetting the demo data:** run `make db-reset` again.
+- **Ports:** Postgres uses port **5433**, so it won't clash with a Postgres you already run on 5432. The frontend passes `/api/*` calls to the API, so no CORS setup is needed.
+- **Refreshing the page logs you out.** Login tokens are kept in memory only, never saved in the browser.
+- **To reset the demo data,** run `make db-reset` again.
 
-From a fresh clone, setup plus `make check` took about 1.5 minutes on a machine that already had the Docker image and package caches; allow a few more minutes on a brand-new machine for the downloads.
+Setup takes about 2 minutes on a machine that has already downloaded Docker and package files, and a few more on a new machine.
 
 ## Demo accounts
 
@@ -49,11 +49,11 @@ Every account's password is `password`.
 | `bob@northwind.test` | Northwind Labs                      | agency_admin                        | `/login`        |
 | `ravi@acme.test`     | Pixel Studio **and** Northwind Labs | client_user at both (Acme, Initech) | `/portal/login` |
 
-Ravi is the "one person, two agencies" case: one account, one password, a separate membership in each agency. Pixel's seed data has both internal and client-visible tasks, comments and files, so you can compare what Alice sees with what Ravi sees.
+Ravi is the "one person, two agencies" case: one account and one password, with separate access to each agency. Pixel's demo data mixes internal and client-visible tasks, comments and files, so you can compare what Alice sees with what Ravi sees.
 
 ## A five-minute tour
 
-Use a normal window for staff and a private window for the client, so both stay signed in.
+Use a normal browser window for staff and a private window for the client, so both can stay logged in.
 
 1. **Internal vs client view.** As Alice, open *Acme website redesign*: 3 tasks and 5 hours, including the internal "Fix our staging budget overrun". As Ravi (portal, pick Pixel Studio), the same project shows 2 tasks and 3 hours, and searching "budget" finds nothing.
 2. **Comments and files.** As Alice, open *Homepage mockups*: an internal comment, an internal file, and badges saying what the client actually sees. Ravi sees only the client comment and `homepage-v2.fig`. Ravi clicks **Approve**, and Alice's drawer now shows "Approved by client".
@@ -70,16 +70,16 @@ make web-check   # frontend: typecheck, 40 unit/component tests, production buil
 make check       # both
 ```
 
-The backend tests create and drop their own databases (`ad_test*`), so they never touch your dev data. Nothing in them mocks the database: access rules are Postgres's job, so the tests check Postgres.
+The backend tests create and delete their own databases (`ad_test*`), so your demo data is never touched. They run against a real Postgres, not a fake one, because Postgres is what enforces the access rules.
 
 | File                       | What it proves                                                                                                                                                                                   |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tests/test_db_rules.py`   | Tenant isolation, client visibility and the edge cases, checked directly against Postgres as the same role the API uses. Also fails if any table with an `agency_id` is missing RLS.             |
-| `tests/test_api.py`        | The same rules over HTTP for every endpoint: another tenant gets 404, clients never see internal content (including via search, filters, counts and downloads), and role rules hold.             |
-| `tests/test_migrations.py` | Alembic migrations produce exactly `db/schema.sql`, and downgrade/upgrade round-trips.                                                                                                           |
-| `frontend/src/**/*.test.*` | API client behaviour, the login/session state, UI defaults (new comments and files start internal), and guards: no tokens in browser storage, and portal code never uses staff code or staff API calls. |
+| `tests/test_db_rules.py`   | Agencies can't see each other's data, clients can't see internal content, and the edge cases hold. Checked directly in Postgres, as the same database role the API uses. Also fails if a new agency table is added without its security rules. |
+| `tests/test_api.py`        | The same rules through every API endpoint: another agency gets 404, clients never see internal content (including through search, filters, counts and downloads), and each role can only do what it should. |
+| `tests/test_migrations.py` | The database migrations build exactly the schema in `db/schema.sql`, and can be undone and redone cleanly. |
+| `frontend/src/**/*.test.*` | The API client, login state, and safe defaults (new comments and files start as internal). Also checks that tokens are never saved in the browser and that the client portal never uses staff code. |
 
-API tests are named after the five edge cases (`test_cross_tenant_*`, `test_internal_content_leaking_to_clients_*`, `test_one_person_in_two_agencies_*`, `test_invite_races_*`, `test_removing_member_mid_task_*`); the DB rule tests are grouped under one heading per edge case.
+API tests are named after the five edge cases (`test_cross_tenant_*`, `test_internal_content_leaking_to_clients_*`, `test_one_person_in_two_agencies_*`, `test_invite_races_*`, `test_removing_member_mid_task_*`). The database tests are grouped the same way.
 
 ## Try the API
 
@@ -101,15 +101,15 @@ Staff log in with `POST /auth/login`; clients use `POST /auth/portal/login`. The
 ## Project layout
 
 ```
-db/schema.sql          Source of truth: tables, constraints, RLS policies, triggers, functions
+db/schema.sql          The full database design: tables, rules, security (RLS) policies, triggers
 db/seed.sql            Demo data (2 agencies, shared-email user, internal + client-visible content)
 db/dev_roles.sql       Local-only passwords for the DB roles (never use in production)
 backend/app/
-  db.py                get_tenant_db: the one place each request's tenant context is set
+  db.py                get_tenant_db: the one place each request tells the database who is asking
   auth/                Passwords, tokens, login, agency selection, invite acceptance
   routers/             Thin HTTP layer
   services/            Business rules (and file storage)
-  repositories/        SQL (no tenant filters needed; RLS applies them)
+  repositories/        Database queries (the database adds the agency filter itself)
   schemas/             Pydantic request/response models (separate Staff* and Client* shapes)
 backend/migrations/    Alembic (0001 = baseline schema, then one revision per change)
 frontend/src/
@@ -120,7 +120,7 @@ frontend/src/
   shared/              Login, agency picker, invite acceptance
 tests/                 DB-level, API-level and migration tests
 scripts/               make env and seed-file helpers
-DESIGN.md              How isolation, visibility and identity work
+DESIGN.md              How agencies are kept apart, what clients can see, and how logins work
 ROADMAP.md             Build order and status
 AGENTS.md              Rules for AI coding assistants working in this repo
 ```
@@ -142,12 +142,12 @@ The required scope is complete. [ROADMAP.md](ROADMAP.md) has the step-by-step hi
 
 ## Known limits
 
-- **Sessions don't survive a page refresh.** Tokens live in memory to keep them away from scripts. An httpOnly cookie would fix this, at the cost of CSRF protection.
+- **Refreshing the page logs you out.** Tokens are kept in memory so other scripts on the page can't read them. Storing them in a secure cookie would fix this, but would need extra protection against cross-site requests (CSRF).
 - **No email sending.** Creating an invite shows the admin a one-time link to pass on.
-- **Files live on local disk** behind a small storage interface; S3 or similar would slot in there.
+- **Files are stored on the local disk.** The storage code is kept separate, so S3 or similar could replace it easily.
 - **No rate limiting** on login yet.
-- **No delete endpoints for tasks, comments, files or time entries.** For time entries that's by design (they feed reporting). Comments also can't be edited after posting.
+- **Tasks, comments, files and time entries can't be deleted,** and comments can't be edited after posting. For time entries this is on purpose, since reports depend on them.
 
 ## How I used AI
 
-I used an AI coding assistant for explanations, scaffolding and boilerplate. The schema, the isolation model and the edge-case decisions are mine. `AGENTS.md` sets the security rules the assistant had to follow, for example never disabling RLS and never taking `agency_id` from the request. Every one of those rules is enforced by the database and checked by the tests above.
+I used an AI coding assistant for explanations, setting up the project structure and repetitive code. The schema, the way agencies are kept apart, and the edge-case decisions are mine. `AGENTS.md` lists the security rules the assistant had to follow, for example never turning off the database's security rules and never taking the agency from the request. The database enforces every one of these rules, and the tests above check them.
