@@ -41,10 +41,10 @@ Rules for every step:
 10. [x] **Comments:** `routers/comments.py` (`beb3619..e1cb19e`)
     A client's POST always gets `visibility=client`.
     *Tests:* a client never sees internal comments; flipping a task to internal hides its comments from the client.
-11. [x] **Files: upload, download, review:** `routers/files.py`, `services/storage.py`
+11. [x] **Files: upload, download, review:** `routers/files.py`, `services/storage.py` (`222ded4..bdc6d2c`)
     Local-disk storage behind an interface. Downloads check the file row under RLS first, then stream it. Clients use `POST /files/{id}/review {decision}`.
     *Tests:* a client can't download an internal file by ID (404); a client can review only client-visible files; a client can't rename a file.
-12. [ ] **Time entries + hours summary:** `routers/time.py`
+12. [x] **Time entries + hours summary:** `routers/time.py`
     Staff log their own time. Clients never receive raw entries.
     *Tests:* a client gets 404 on time entry endpoints; staff and client hour totals differ correctly.
 13. [ ] **Project dashboard:** `GET /projects/{id}/dashboard`
@@ -89,5 +89,5 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2: steps 5–11 complete. 138 tests passing (26 DB rules, 2 migrations, 110 API).
-- Next: step 12 (time entries + hours summary).
+- Phase 2: steps 5–12 complete. 150 tests passing (26 DB rules, 2 migrations, 122 API).
+- Next: step 13 (project dashboard).
