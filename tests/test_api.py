@@ -23,7 +23,7 @@ from app.auth.tokens import issue_session_token
 from app.config import Settings
 from app.db import TenantDb, get_tenant_db
 from app.main import create_app
-from conftest import DSN, api_database_url, auth_database_url
+from conftest import DSN, api_database_url, auth_database_url, build_test_database
 
 PIXEL = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
 NORTHWIND = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000001")
@@ -38,6 +38,14 @@ SECRET = "api-test-secret-" + "y" * 40
 
 
 # ---------------------------------------------------------------- fixtures
+@pytest.fixture(scope="module", autouse=True)
+def restore_seed_afterwards():
+    # These tests go through the real API, so their writes are committed.
+    # Rebuild the database afterwards so other test modules see the plain seed.
+    yield
+    build_test_database()
+
+
 @pytest.fixture(scope="module")
 def app() -> FastAPI:
     settings = Settings(
@@ -610,3 +618,169 @@ def test_rls_refusing_a_write_is_403_without_database_details(client: TestClient
                        headers=session_headers(client, "mark@pixel.test", PIXEL))
     assert resp.status_code == 403
     assert resp.json() == {"detail": "Not allowed"}
+
+
+# ============================================ step 8: clients and projects
+NINA = uuid.UUID("00000000-0000-0000-0000-0000000000a3")    # Pixel member, on Acme only
+ACME_PROJECT = "aaaaaaaa-0000-0000-0002-000000000001"
+GLOBEX_PROJECT = "aaaaaaaa-0000-0000-0002-000000000002"
+NW_PROJECT = "bbbbbbbb-0000-0000-0002-000000000001"
+
+
+def project_ids(client: TestClient, headers: dict) -> set[str]:
+    resp = client.get("/projects", headers=headers)
+    assert resp.status_code == 200
+    return {p["id"] for p in resp.json()}
+
+
+def new_project(client: TestClient, alice: dict, name: str = "Temp project") -> str:
+    resp = client.post("/projects", headers=alice, json={"client_id": ACME, "name": name})
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def test_admin_sees_all_projects_member_sees_only_assigned(client: TestClient, alice: dict) -> None:
+    assert {ACME_PROJECT, GLOBEX_PROJECT} <= project_ids(client, alice)
+    assert NW_PROJECT not in project_ids(client, alice)
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    assert project_ids(client, nina) == {ACME_PROJECT}
+    assert client.get(f"/projects/{GLOBEX_PROJECT}", headers=nina).status_code == 404
+    assert client.get(f"/projects/{GLOBEX_PROJECT}/members", headers=nina).status_code == 404
+
+
+def test_client_sees_own_clients_projects_without_internal_fields(client: TestClient) -> None:
+    ravi = session_headers(client, "ravi@acme.test", PIXEL, portal=True)
+    projects = client.get("/projects", headers=ravi).json()
+    assert [p["id"] for p in projects] == [ACME_PROJECT]
+    assert set(projects[0]) == {"id", "name", "created_at"}
+    assert set(client.get(f"/projects/{ACME_PROJECT}", headers=ravi).json()) == {"id", "name", "created_at"}
+    assert client.get(f"/projects/{GLOBEX_PROJECT}", headers=ravi).status_code == 404
+
+
+def test_staff_project_has_client_fields(client: TestClient, alice: dict) -> None:
+    body = client.get(f"/projects/{ACME_PROJECT}", headers=alice).json()
+    assert body["client_id"] == ACME and body["client_name"] == "Acme Corp"
+
+
+def test_cross_tenant_project_and_client_ids_are_404(client: TestClient, alice: dict) -> None:
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    assert client.get(f"/projects/{ACME_PROJECT}", headers=bob).status_code == 404
+    assert client.get(f"/projects/{ACME_PROJECT}/members", headers=bob).status_code == 404
+    assert client.post(f"/projects/{ACME_PROJECT}/members", headers=bob,
+                       json={"user_id": str(BOB)}).status_code == 404
+    assert client.delete(f"/projects/{ACME_PROJECT}/members/{MARK}", headers=bob).status_code == 404
+    assert client.get(f"/clients/{ACME}", headers=bob).status_code == 404
+    assert client.get(f"/projects/{NW_PROJECT}", headers=alice).status_code == 404
+    assert client.get(f"/clients/{INITECH}", headers=alice).status_code == 404
+    # Nothing changed for Pixel.
+    members = {m["user_id"] for m in client.get(f"/projects/{ACME_PROJECT}/members", headers=alice).json()}
+    assert {str(MARK), str(NINA)} <= members
+
+
+def test_cross_tenant_project_for_another_agencys_client_is_422(client: TestClient, alice: dict) -> None:
+    resp = client.post("/projects", headers=alice, json={"client_id": INITECH, "name": "Sneaky"})
+    assert resp.status_code == 422 and "Initech" not in resp.text
+
+
+def test_admin_creates_client_and_project(client: TestClient, alice: dict) -> None:
+    created = client.post("/clients", headers=alice, json={"name": "  Hooli  "})
+    assert created.status_code == 201 and created.json()["name"] == "Hooli"
+    client_id = created.json()["id"]
+    assert client_id in {c["id"] for c in client.get("/clients", headers=alice).json()}
+
+    project = client.post("/projects", headers=alice, json={"client_id": client_id, "name": "Hooli app"})
+    assert project.status_code == 201
+    assert project.json()["client_name"] == "Hooli"
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    assert project.json()["id"] not in project_ids(client, nina)   # not on it
+
+
+@pytest.mark.parametrize("who, portal", [("mark@pixel.test", False), ("ravi@acme.test", True)])
+def test_non_admin_cannot_write_clients_projects_or_members(
+    client: TestClient, who: str, portal: bool,
+) -> None:
+    headers = session_headers(client, who, PIXEL, portal=portal)
+    assert client.post("/clients", headers=headers, json={"name": "X"}).status_code == 403
+    assert client.post("/projects", headers=headers,
+                       json={"client_id": ACME, "name": "X"}).status_code == 403
+    assert client.post(f"/projects/{ACME_PROJECT}/members", headers=headers,
+                       json={"user_id": str(MARK)}).status_code == 403
+    assert client.delete(f"/projects/{ACME_PROJECT}/members/{NINA}", headers=headers).status_code == 403
+
+
+def test_client_cannot_see_clients_or_project_team(client: TestClient) -> None:
+    ravi = session_headers(client, "ravi@acme.test", PIXEL, portal=True)
+    assert client.get("/clients", headers=ravi).status_code == 403
+    assert client.get(f"/clients/{ACME}", headers=ravi).status_code == 403
+    assert client.get(f"/projects/{ACME_PROJECT}/members", headers=ravi).status_code == 403
+
+
+def test_member_can_see_team_of_their_project(client: TestClient) -> None:
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    members = client.get(f"/projects/{ACME_PROJECT}/members", headers=nina).json()
+    assert {m["user_id"] for m in members} >= {str(MARK), str(NINA)}
+
+
+def test_add_member_only_accepts_active_staff_of_this_agency(client: TestClient, alice: dict) -> None:
+    project_id = new_project(client, alice)
+    added = client.post(f"/projects/{project_id}/members", headers=alice, json={"user_id": str(MARK)})
+    assert added.status_code == 201 and [m["user_id"] for m in added.json()] == [str(MARK)]
+    assert client.post(f"/projects/{project_id}/members", headers=alice,
+                       json={"user_id": str(MARK)}).status_code == 409
+    for not_allowed in (RAVI, BOB, uuid.uuid4()):     # client user, other agency, nobody
+        resp = client.post(f"/projects/{project_id}/members", headers=alice,
+                           json={"user_id": str(not_allowed)})
+        assert resp.status_code == 422
+        assert resp.json() == {"detail": "Only active staff members of this agency can be added to a project"}
+
+    with psycopg.connect(DSN, autocommit=True) as admin:
+        admin.execute("UPDATE agency_memberships SET removed_at = now() WHERE agency_id = %s AND user_id = %s",
+                      (PIXEL, NINA))
+        try:
+            assert client.post(f"/projects/{project_id}/members", headers=alice,
+                               json={"user_id": str(NINA)}).status_code == 422
+        finally:
+            admin.execute("UPDATE agency_memberships SET removed_at = NULL WHERE agency_id = %s AND user_id = %s",
+                          (PIXEL, NINA))
+
+
+def test_removing_member_mid_task_unassigns_only_their_tasks_and_logs_it(
+    client: TestClient, alice: dict,
+) -> None:
+    project_id = new_project(client, alice, "Mid-task removal")
+    for user in (MARK, NINA):
+        assert client.post(f"/projects/{project_id}/members", headers=alice,
+                           json={"user_id": str(user)}).status_code == 201
+    mark_task, nina_task = uuid.uuid4(), uuid.uuid4()
+    with psycopg.connect(DSN, autocommit=True) as admin:
+        for task_id, assignee in ((mark_task, MARK), (nina_task, NINA)):
+            admin.execute(
+                """INSERT INTO tasks (id, agency_id, project_id, title, status, priority, visibility,
+                                      assignee_user_id, created_by)
+                   VALUES (%s, %s, %s, 'Half done', 'in_progress', 'high', 'internal', %s, %s)""",
+                (task_id, PIXEL, project_id, assignee, ALICE))
+        admin.execute("""INSERT INTO time_entries (agency_id, task_id, user_id, minutes, entry_date, note)
+                         VALUES (%s, %s, %s, 90, '2026-11-10', 'work so far')""", (PIXEL, mark_task, MARK))
+
+    mark = session_headers(client, "mark@pixel.test", PIXEL)
+    assert project_id in project_ids(client, mark)
+
+    resp = client.delete(f"/projects/{project_id}/members/{MARK}", headers=alice)
+    assert resp.status_code == 200 and resp.json() == {"unassigned_task_count": 1}
+
+    with psycopg.connect(DSN) as admin:
+        tasks = dict(admin.execute(
+            "SELECT id, (assignee_user_id, status) FROM tasks WHERE project_id = %s", (project_id,)).fetchall())
+        assert tasks[mark_task] == (None, "in_progress")          # unassigned, status kept
+        assert tasks[nina_task] == (str(NINA), "in_progress")     # other people untouched
+        events = admin.execute(
+            "SELECT kind, actor_id, payload->>'from' FROM task_events WHERE task_id = %s", (mark_task,)).fetchall()
+        assert events == [("auto_unassigned_member_removed", ALICE, str(MARK))]
+        assert admin.execute("SELECT count(*) FROM time_entries WHERE task_id = %s",
+                             (mark_task,)).fetchone()[0] == 1      # history kept
+
+    assert project_id not in project_ids(client, mark)             # access gone immediately
+    assert client.get(f"/projects/{project_id}", headers=mark).status_code == 404
+    assert client.delete(f"/projects/{project_id}/members/{MARK}", headers=alice).status_code == 404
+    # Take Nina off too, so later tests still see her on the Acme project only.
+    assert client.delete(f"/projects/{project_id}/members/{NINA}", headers=alice).status_code == 200

@@ -40,6 +40,14 @@ def auth_database_url() -> str:
 
 @pytest.fixture(scope="session", autouse=True)
 def database():
+    build_test_database()
+    yield
+
+
+def build_test_database() -> None:
+    """(Re)create ad_test from schema.sql + dev_roles.sql + seed.sql.
+    Test modules that commit data call this when they finish, so every
+    module starts from the same seed."""
     dbname = psycopg.conninfo.conninfo_to_dict(DSN)["dbname"]
     with psycopg.connect(ADMIN_DSN, autocommit=True) as c:
         c.execute(f'DROP DATABASE IF EXISTS "{dbname}" WITH (FORCE)')
@@ -48,7 +56,6 @@ def database():
         c.execute((ROOT / "db/schema.sql").read_text())
         c.execute((ROOT / "db/dev_roles.sql").read_text())
         c.execute(seed_sql_for_driver())
-    yield
 
 
 def seed_sql_for_driver() -> str:

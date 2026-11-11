@@ -17,7 +17,7 @@ from app.auth.db import create_auth_engine
 from app.config import Settings
 from app.db import create_api_engine
 from app.errors import ServiceError
-from app.routers import auth, invites, me
+from app.routers import auth, clients, invites, me, projects
 
 INSUFFICIENT_PRIVILEGE = "42501"  # includes "new row violates row-level security policy"
 
@@ -57,6 +57,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.invite_accept_router)
     app.include_router(invites.router)
     app.include_router(me.router)
+    app.include_router(clients.router)
+    app.include_router(projects.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
