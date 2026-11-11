@@ -26,10 +26,10 @@ Rules for every step:
 5. [x] **App skeleton + `get_tenant_db`:** `backend/app/main.py`, `backend/app/db.py`, `backend/app/config.py` (`a9fe9da`)
    This is the single place that sets `SET LOCAL ROLE` and the `app.*` context. Also add a `GET /health` endpoint.
    *Test:* after a request finishes, the next transaction on the same pooled connection sees an empty `app.agency_id`. This proves no context leaks between requests.
-6. [x] **Auth: login, agency selection, `/me`:** `backend/app/auth/`
+6. [x] **Auth: login, agency selection, `/me`:** `backend/app/auth/` (`aaa5cef..b347cd9`)
    bcrypt hashing, plus real hashes in the seed (replace the placeholder). Endpoints: `POST /auth/login`, `POST /auth/portal/login`, `POST /auth/session`, `GET /me`. Staff and portal logins each list only their kind of membership.
    *Tests:* Ravi logs in once and sees two memberships; the session token works only for the chosen agency; a removed membership gets 401 on the next request.
-7. [ ] **Invites:** `routers/invites.py`, `services/invites.py`
+7. [x] **Invites:** `routers/invites.py`, `services/invites.py`
    Create, resend (upsert), revoke, and accept (through `app.accept_invite` as `agencydesk_auth`). Accepting as an existing user requires being logged in as that email.
    *Tests:* resend makes no duplicate and the old link stops working; two simultaneous accepts over HTTP produce one account; a non-admin gets 403.
 8. [ ] **Clients, projects, project members:** `routers/projects.py`
@@ -82,9 +82,11 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 |---|---|---|---|---|
 | 1 | 3 | `app.accept_invite` failed: "column reference agency_id is ambiguous" | The function's `RETURNS TABLE` output columns share names with table columns, and PL/pgSQL can't tell which one `ON CONFLICT (agency_id, user_id)` means | Renamed the outputs to `out_*` and used `ON CONFLICT ON CONSTRAINT agency_memberships_pkey` |
 | 2 | 5 | `client_user` memberships not found by `get_tenant_db` (401 for every client) | `agency_memberships` read policy needs `app.client_id`, which is only known after the lookup; DB tests missed it because they look up as `postgres` | Own-row branch `OR user_id = app.user_id()` in the read policy, migration 0002 (`a9fe9da`) |
+| 3 | 7 | Anyone holding an invite link could attach an existing account to the agency without that user logging in | `app.accept_invite` reused an existing user on `ON CONFLICT (email)` with no check on who was accepting | `p_acting_user` parameter; existing account requires the caller to be logged in as it, checked inside the locked step (migration 0003) |
+| 4 | 7 | `alembic upgrade` failed: "value too long for type character varying(32)" | Revision ID `0003_accept_invite_requires_login` exceeds `alembic_version.version_num` length | Shortened the revision ID to `0003_accept_invite_login` |
 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2: steps 5–6 complete. 56 tests passing (20 DB rules, 2 migrations, 34 API).
-- Next: step 7 (invites).
+- Phase 2: steps 5–7 complete. 82 tests passing (26 DB rules, 2 migrations, 54 API).
+- Next: step 8 (clients, projects, project members).
