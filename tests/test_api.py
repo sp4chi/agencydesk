@@ -784,3 +784,167 @@ def test_removing_member_mid_task_unassigns_only_their_tasks_and_logs_it(
     assert client.delete(f"/projects/{project_id}/members/{MARK}", headers=alice).status_code == 404
     # Take Nina off too, so later tests still see her on the Acme project only.
     assert client.delete(f"/projects/{project_id}/members/{NINA}", headers=alice).status_code == 200
+
+
+# ===================================================== step 9: tasks
+TASK_MOCKUPS = "aaaaaaaa-0000-0000-0003-000000000001"   # Acme, client-visible, in_review, high, Mark
+TASK_BUDGET = "aaaaaaaa-0000-0000-0003-000000000002"    # Acme, INTERNAL, in_progress, urgent, Nina
+TASK_CONTENT = "aaaaaaaa-0000-0000-0003-000000000003"   # Acme, client-visible, todo, medium, Nina
+TASK_GLOBEX = "aaaaaaaa-0000-0000-0003-000000000004"    # Globex, client-visible, unassigned
+CLIENT_TASK_FIELDS = {"id", "project_id", "title", "description", "status", "priority",
+                      "due_date", "created_at", "updated_at"}
+
+
+def task_ids(client: TestClient, headers: dict, project: str = ACME_PROJECT, **params) -> set[str]:
+    resp = client.get(f"/projects/{project}/tasks", headers=headers, params=params)
+    assert resp.status_code == 200, resp.text
+    return {t["id"] for t in resp.json()}
+
+
+@pytest.fixture
+def ravi(client: TestClient) -> dict:
+    return session_headers(client, "ravi@acme.test", PIXEL, portal=True)
+
+
+@pytest.fixture
+def mark(client: TestClient) -> dict:
+    return session_headers(client, "mark@pixel.test", PIXEL)
+
+
+def test_internal_content_leaking_to_clients_via_task_list_search_and_filters(
+    client: TestClient, ravi: dict,
+) -> None:
+    assert task_ids(client, ravi) == {TASK_MOCKUPS, TASK_CONTENT}
+    for task in client.get(f"/projects/{ACME_PROJECT}/tasks", headers=ravi).json():
+        assert set(task) == CLIENT_TASK_FIELDS                       # no visibility/assignee/creator
+    # The internal task matches each of these, but the client must get nothing.
+    for params in ({"q": "budget"}, {"q": "STAGING"}, {"q": "overrun"},
+                   {"status": "in_progress"}, {"priority": "urgent"},
+                   {"q": "budget", "status": "in_progress", "priority": "urgent"}):
+        assert task_ids(client, ravi, **params) == set(), params
+    assert TASK_BUDGET not in task_ids(client, ravi, q="o")             # broad search
+    assert client.get(f"/tasks/{TASK_BUDGET}", headers=ravi).status_code == 404
+    assert "budget" not in client.get(f"/tasks/{TASK_BUDGET}", headers=ravi).text.lower()
+
+
+@pytest.mark.parametrize("assignee", ["me", "unassigned", str(NINA)])
+def test_client_cannot_filter_by_assignee(client: TestClient, ravi: dict, assignee: str) -> None:
+    resp = client.get(f"/projects/{ACME_PROJECT}/tasks", headers=ravi, params={"assignee": assignee})
+    assert resp.status_code == 403
+
+
+def test_client_cannot_create_or_change_tasks(client: TestClient, ravi: dict) -> None:
+    assert client.post(f"/projects/{ACME_PROJECT}/tasks", headers=ravi,
+                       json={"title": "Please add a blog"}).status_code == 403
+    for change in ({"status": "done"}, {"priority": "low"}, {"title": "Renamed"}):
+        assert client.patch(f"/tasks/{TASK_MOCKUPS}", headers=ravi, json=change).status_code == 403
+    with psycopg.connect(DSN) as admin:
+        assert admin.execute("SELECT status, priority, title FROM tasks WHERE id = %s",
+                             (TASK_MOCKUPS,)).fetchone() == ("in_review", "high", "Homepage mockups")
+
+
+def test_staff_filters_and_search(client: TestClient, alice: dict, mark: dict) -> None:
+    assert task_ids(client, alice) >= {TASK_MOCKUPS, TASK_BUDGET, TASK_CONTENT}
+    assert task_ids(client, alice, status="in_progress") == {TASK_BUDGET}
+    assert task_ids(client, alice, priority="urgent") == {TASK_BUDGET}
+    assert task_ids(client, alice, q="BUDGET") == {TASK_BUDGET}               # case-insensitive
+    assert task_ids(client, alice, assignee=str(NINA)) == {TASK_BUDGET, TASK_CONTENT}
+    assert task_ids(client, mark, assignee="me") == {TASK_MOCKUPS}
+    assert task_ids(client, alice, project=GLOBEX_PROJECT, assignee="unassigned") == {TASK_GLOBEX}
+    # LIKE wildcards are matched literally, not as "anything".
+    assert task_ids(client, alice, q="%") == set()
+    assert task_ids(client, alice, q="_") == set()
+    staff_task = client.get(f"/tasks/{TASK_BUDGET}", headers=alice).json()
+    assert staff_task["visibility"] == "internal" and staff_task["assignee_name"] == "Nina (Pixel member)"
+
+
+@pytest.mark.parametrize("params", [{"assignee": "someone"}, {"status": "bogus"}, {"priority": "meh"}])
+def test_bad_filter_values_are_422(client: TestClient, alice: dict, params: dict) -> None:
+    assert client.get(f"/projects/{ACME_PROJECT}/tasks", headers=alice, params=params).status_code == 422
+
+
+def test_member_creates_task_internal_by_default_hidden_from_client(
+    client: TestClient, mark: dict, ravi: dict,
+) -> None:
+    resp = client.post(f"/projects/{ACME_PROJECT}/tasks", headers=mark,
+                       json={"title": "  Draft internal estimate  ", "assignee_user_id": str(MARK)})
+    assert resp.status_code == 201
+    task = resp.json()
+    assert (task["title"], task["visibility"], task["status"], task["created_by"]) == (
+        "Draft internal estimate", "internal", "todo", str(MARK))
+    assert task["id"] not in task_ids(client, ravi)
+    assert task_ids(client, ravi, q="estimate") == set()
+    assert client.get(f"/tasks/{task['id']}", headers=ravi).status_code == 404
+
+
+def test_assigning_someone_outside_the_project_is_422(client: TestClient, alice: dict, mark: dict) -> None:
+    for outsider in (ALICE, BOB, RAVI, uuid.uuid4()):   # admin not on project, other agency, client, nobody
+        created = client.post(f"/projects/{ACME_PROJECT}/tasks", headers=mark,
+                              json={"title": "X", "assignee_user_id": str(outsider)})
+        assert created.status_code == 422
+        assert created.json() == {"detail": "The assignee must be a member of this project"}
+        patched = client.patch(f"/tasks/{TASK_MOCKUPS}", headers=mark,
+                               json={"assignee_user_id": str(outsider)})
+        assert patched.status_code == 422
+
+    # Someone who *is* on the project: fine, and the change is logged.
+    assert client.patch(f"/tasks/{TASK_MOCKUPS}", headers=mark,
+                        json={"assignee_user_id": str(NINA)}).json()["assignee_user_id"] == str(NINA)
+    assert client.patch(f"/tasks/{TASK_MOCKUPS}", headers=mark,
+                        json={"assignee_user_id": str(MARK)}).status_code == 200
+    with psycopg.connect(DSN) as admin:
+        events = admin.execute(
+            """SELECT kind, actor_id, payload->>'to' FROM task_events
+               WHERE task_id = %s ORDER BY id DESC LIMIT 2""", (TASK_MOCKUPS,)).fetchall()
+    assert events == [("assignee_changed", MARK, str(MARK)), ("assignee_changed", MARK, str(NINA))]
+
+
+def test_member_cannot_touch_tasks_on_projects_they_are_not_on(client: TestClient, mark: dict) -> None:
+    assert client.get(f"/projects/{GLOBEX_PROJECT}/tasks", headers=mark).status_code == 404
+    assert client.post(f"/projects/{GLOBEX_PROJECT}/tasks", headers=mark,
+                       json={"title": "X"}).status_code == 404
+    assert client.get(f"/tasks/{TASK_GLOBEX}", headers=mark).status_code == 404
+    assert client.patch(f"/tasks/{TASK_GLOBEX}", headers=mark, json={"status": "done"}).status_code == 404
+
+
+def test_cross_tenant_task_ids_are_404(client: TestClient, alice: dict) -> None:
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    assert client.get(f"/tasks/{TASK_MOCKUPS}", headers=bob).status_code == 404
+    assert client.patch(f"/tasks/{TASK_MOCKUPS}", headers=bob, json={"status": "done"}).status_code == 404
+    assert client.get(f"/projects/{ACME_PROJECT}/tasks", headers=bob).status_code == 404
+    assert client.post(f"/projects/{ACME_PROJECT}/tasks", headers=bob, json={"title": "X"}).status_code == 404
+    assert client.get(f"/tasks/{TASK_NW_SECRET}", headers=alice).status_code == 404
+    assert client.patch(f"/tasks/{TASK_NW_SECRET}", headers=alice, json={"status": "done"}).status_code == 404
+
+
+def test_flipping_task_to_internal_hides_it_from_client(client: TestClient, alice: dict, ravi: dict) -> None:
+    assert client.patch(f"/tasks/{TASK_CONTENT}", headers=alice,
+                        json={"visibility": "internal"}).status_code == 200
+    try:
+        assert TASK_CONTENT not in task_ids(client, ravi)
+        assert task_ids(client, ravi, q="migration") == set()
+        assert client.get(f"/tasks/{TASK_CONTENT}", headers=ravi).status_code == 404
+    finally:
+        client.patch(f"/tasks/{TASK_CONTENT}", headers=alice, json={"visibility": "client"})
+    assert TASK_CONTENT in task_ids(client, ravi)
+
+
+def test_patch_changes_only_sent_fields_and_null_unassigns(client: TestClient, mark: dict) -> None:
+    task = client.post(f"/projects/{ACME_PROJECT}/tasks", headers=mark, json={
+        "title": "Patch me", "priority": "high", "assignee_user_id": str(MARK), "due_date": "2026-12-01",
+    }).json()
+    done = client.patch(f"/tasks/{task['id']}", headers=mark, json={"status": "done"}).json()
+    assert (done["status"], done["priority"], done["assignee_user_id"], done["due_date"]) == (
+        "done", "high", str(MARK), "2026-12-01")
+    cleared = client.patch(f"/tasks/{task['id']}", headers=mark,
+                           json={"assignee_user_id": None, "due_date": None}).json()
+    assert (cleared["assignee_user_id"], cleared["due_date"], cleared["status"]) == (None, None, "done")
+    for bad in ({"status": None}, {"title": "   "}, {"visibility": None}):
+        assert client.patch(f"/tasks/{task['id']}", headers=mark, json=bad).status_code == 422
+
+
+def test_task_inputs_reject_agency_and_project_fields(client: TestClient, mark: dict) -> None:
+    assert client.post(f"/projects/{ACME_PROJECT}/tasks", headers=mark,
+                       json={"title": "X", "agency_id": str(NORTHWIND)}).status_code == 422
+    assert client.patch(f"/tasks/{TASK_MOCKUPS}", headers=mark,
+                        json={"project_id": GLOBEX_PROJECT}).status_code == 422
