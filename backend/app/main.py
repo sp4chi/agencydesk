@@ -27,6 +27,7 @@ from app.routers import (
     me,
     projects,
     tasks,
+    team,
     time,
 )
 from app.services.storage import LocalDiskStorage
@@ -79,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(files.router)
     app.include_router(time.router)
     app.include_router(dashboard.router)
+    app.include_router(team.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

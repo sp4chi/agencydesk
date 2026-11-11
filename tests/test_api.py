@@ -1428,3 +1428,32 @@ def test_dashboard_for_a_project_you_cannot_see_is_404(client: TestClient, ravi:
 def test_dashboard_for_project_with_no_time_shows_zero_hours(client: TestClient, alice: dict) -> None:
     body = dashboard(client, alice, GLOBEX_PROJECT).json()
     assert body["total_hours"] == 0.0 and body["task_counts"]["todo"] >= 1
+
+
+# ================================== step 15: agency team list (for pickers)
+def staff_ids(client: TestClient, headers: dict) -> set[str]:
+    resp = client.get("/team/staff", headers=headers)
+    assert resp.status_code == 200, resp.text
+    return {m["user_id"] for m in resp.json()}
+
+
+def test_team_staff_lists_only_active_staff_of_own_agency(client: TestClient, alice: dict, mark: dict) -> None:
+    assert staff_ids(client, alice) == {str(ALICE), str(MARK), str(NINA)}   # not Ravi (client), not Bob
+    assert staff_ids(client, mark) == {str(ALICE), str(MARK), str(NINA)}    # members see the team too
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    assert staff_ids(client, bob) == {str(BOB)}
+
+
+def test_team_staff_is_forbidden_for_clients(client: TestClient, ravi: dict) -> None:
+    assert client.get("/team/staff", headers=ravi).status_code == 403
+
+
+def test_team_staff_excludes_removed_members(client: TestClient, alice: dict) -> None:
+    with psycopg.connect(DSN, autocommit=True) as admin:
+        admin.execute("UPDATE agency_memberships SET removed_at = now() WHERE agency_id = %s AND user_id = %s",
+                      (PIXEL, NINA))
+        try:
+            assert str(NINA) not in staff_ids(client, alice)
+        finally:
+            admin.execute("UPDATE agency_memberships SET removed_at = NULL WHERE agency_id = %s AND user_id = %s",
+                          (PIXEL, NINA))
