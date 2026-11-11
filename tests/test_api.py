@@ -1366,3 +1366,65 @@ def test_cross_tenant_time_entries_are_404(client: TestClient, alice: dict) -> N
     assert client.patch(f"/time-entries/{seeded_entry_id(MARK)}", headers=bob,
                         json={"minutes": 1}).status_code == 404
     assert client.get(f"/tasks/{TASK_NW_SECRET}/time-entries", headers=alice).status_code == 404
+
+
+# =========================================== step 13: project dashboard
+@pytest.fixture
+def fresh_seed(app: FastAPI) -> None:
+    """Earlier tests in this module add tasks and time to the Acme project.
+    Rebuild the plain seed, and drop the app's pooled connections to the old DB."""
+    build_test_database()
+    app.state.api_engine.dispose()
+    app.state.auth_engine.dispose()
+
+
+def dashboard(client: TestClient, headers: dict, project: str = ACME_PROJECT):
+    return client.get(f"/projects/{project}/dashboard", headers=headers)
+
+
+def test_dashboard_numbers_match_the_seed_and_differ_for_staff_and_client(
+    fresh_seed: None, client: TestClient,
+) -> None:
+    alice = session_headers(client, "alice@pixel.test", PIXEL)
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    ravi = session_headers(client, "ravi@acme.test", PIXEL, portal=True)
+    staff_view = {
+        "project_id": ACME_PROJECT, "project_name": "Acme website redesign",
+        "task_counts": {"todo": 1, "in_progress": 1, "in_review": 1, "done": 0},
+        "total_tasks": 3, "total_hours": 5.0,
+    }
+    assert dashboard(client, alice).json() == staff_view
+    assert dashboard(client, nina).json() == staff_view          # member on the project: same as admin
+    # The internal budget task (in_progress, 2 h) is invisible to the client.
+    assert dashboard(client, ravi).json() == {
+        "project_id": ACME_PROJECT, "project_name": "Acme website redesign",
+        "task_counts": {"todo": 1, "in_progress": 0, "in_review": 1, "done": 0},
+        "total_tasks": 2, "total_hours": 3.0,
+    }
+
+
+def test_internal_content_leaking_to_clients_via_dashboard(
+    client: TestClient, alice: dict, mark: dict, ravi: dict,
+) -> None:
+    staff_before, client_before = dashboard(client, alice).json(), dashboard(client, ravi).json()
+    task = client.post(f"/projects/{ACME_PROJECT}/tasks", headers=mark,
+                       json={"title": "Internal QA pass", "status": "done"}).json()
+    log(client, mark, task["id"], 90)
+    staff_after, client_after = dashboard(client, alice).json(), dashboard(client, ravi).json()
+    assert staff_after["task_counts"]["done"] == staff_before["task_counts"]["done"] + 1
+    assert staff_after["total_hours"] == staff_before["total_hours"] + 1.5
+    assert client_after == client_before                         # internal work: no trace for the client
+
+
+def test_dashboard_for_a_project_you_cannot_see_is_404(client: TestClient, ravi: dict) -> None:
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    assert dashboard(client, ravi, GLOBEX_PROJECT).status_code == 404
+    assert dashboard(client, bob).status_code == 404
+    assert dashboard(client, nina, GLOBEX_PROJECT).status_code == 404
+    assert dashboard(client, ravi, str(uuid.uuid4())).status_code == 404
+
+
+def test_dashboard_for_project_with_no_time_shows_zero_hours(client: TestClient, alice: dict) -> None:
+    body = dashboard(client, alice, GLOBEX_PROJECT).json()
+    assert body["total_hours"] == 0.0 and body["task_counts"]["todo"] >= 1
