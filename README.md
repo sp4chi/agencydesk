@@ -41,8 +41,8 @@ Setup takes about 2 minutes on a machine that has already downloaded Docker and 
 
 Every account's password is `password`.
 
-| Email                | Agency                              | Role                                | Logs in at     |
-| -------------------- | ----------------------------------- | ----------------------------------- | -------------- |
+| Email                | Agency                              | Role                                | Logs in at      |
+| -------------------- | ----------------------------------- | ----------------------------------- | --------------- |
 | `alice@pixel.test`   | Pixel Studio                        | agency_admin                        | `/login`        |
 | `mark@pixel.test`    | Pixel Studio                        | agency_member (Acme project)        | `/login`        |
 | `nina@pixel.test`    | Pixel Studio                        | agency_member (Acme project)        | `/login`        |
@@ -55,9 +55,9 @@ Ravi is the "one person, two agencies" case: one account and one password, with 
 
 Use a normal browser window for staff and a private window for the client, so both can stay logged in.
 
-1. **Internal vs client view.** As Alice, open *Acme website redesign*: 3 tasks and 5 hours, including the internal "Fix our staging budget overrun". As Ravi (portal, pick Pixel Studio), the same project shows 2 tasks and 3 hours, and searching "budget" finds nothing.
-2. **Comments and files.** As Alice, open *Homepage mockups*: an internal comment, an internal file, and badges saying what the client actually sees. Ravi sees only the client comment and `homepage-v2.fig`. Ravi clicks **Approve**, and Alice's drawer now shows "Approved by client".
-3. **Hiding a task.** As Alice, set *Content migration* to Internal. It disappears from Ravi's portal, together with its comments and files.
+1. **Internal vs client view.** As Alice, open _Acme website redesign_: 3 tasks and 5 hours, including the internal "Fix our staging budget overrun". As Ravi (portal, pick Pixel Studio), the same project shows 2 tasks and 3 hours, and searching "budget" finds nothing.
+2. **Comments and files.** As Alice, open _Homepage mockups_: an internal comment, an internal file, and badges saying what the client actually sees. Ravi sees only the client comment and `homepage-v2.fig`. Ravi clicks **Approve**, and Alice's drawer now shows "Approved by client".
+3. **Hiding a task.** As Alice, set _Content migration_ to Internal. It disappears from Ravi's portal, together with its comments and files.
 4. **One person, two agencies.** Ravi signs in once and picks an agency. **Switch agency** moves him to Northwind, where he sees only Initech's project.
 5. **Removing a member mid-task.** As Alice, open the **Team** tab and remove Nina. The app reports her 2 tasks were unassigned; their status and logged time are untouched.
 6. **Invites.** As Alice, go to **Invites**, invite a new email as a client of Acme, and open the link in a private window to create the account. Opening the same link again is refused.
@@ -72,12 +72,12 @@ make check       # both
 
 The backend tests create and delete their own databases (`ad_test*`), so your demo data is never touched. They run against a real Postgres, not a fake one, because Postgres is what enforces the access rules.
 
-| File                       | What it proves                                                                                                                                                                                   |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| File                       | What it proves                                                                                                                                                                                                                                 |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tests/test_db_rules.py`   | Agencies can't see each other's data, clients can't see internal content, and the edge cases hold. Checked directly in Postgres, as the same database role the API uses. Also fails if a new agency table is added without its security rules. |
-| `tests/test_api.py`        | The same rules through every API endpoint: another agency gets 404, clients never see internal content (including through search, filters, counts and downloads), and each role can only do what it should. |
-| `tests/test_migrations.py` | The database migrations build exactly the schema in `db/schema.sql`, and can be undone and redone cleanly. |
-| `frontend/src/**/*.test.*` | The API client, login state, and safe defaults (new comments and files start as internal). Also checks that tokens are never saved in the browser and that the client portal never uses staff code. |
+| `tests/test_api.py`        | The same rules through every API endpoint: another agency gets 404, clients never see internal content (including through search, filters, counts and downloads), and each role can only do what it should.                                    |
+| `tests/test_migrations.py` | The database migrations build exactly the schema in `db/schema.sql`, and can be undone and redone cleanly.                                                                                                                                     |
+| `frontend/src/**/*.test.*` | The API client, login state, and safe defaults (new comments and files start as internal). Also checks that tokens are never saved in the browser and that the client portal never uses staff code.                                            |
 
 API tests are named after the five edge cases (`test_cross_tenant_*`, `test_internal_content_leaking_to_clients_*`, `test_one_person_in_two_agencies_*`, `test_invite_races_*`, `test_removing_member_mid_task_*`). The database tests are grouped the same way.
 
@@ -121,24 +121,18 @@ frontend/src/
 tests/                 DB-level, API-level and migration tests
 scripts/               make env and seed-file helpers
 DESIGN.md              How agencies are kept apart, what clients can see, and how logins work
-ROADMAP.md             Build order and status
+ROADMAP.md             Build order
 AGENTS.md              Rules for AI coding assistants working in this repo
 ```
 
 ## Status
 
-The required scope is complete. [ROADMAP.md](ROADMAP.md) has the step-by-step history, with commits and the bugs found along the way.
+Still to do (optional bonus items):
 
-| Area | State |
-| ---- | ----- |
-| Database: schema, RLS policies, triggers, seed, migrations | Done |
-| API: auth, invites, clients, projects, members, tasks, comments, files, time, dashboard | Done |
-| Staff app: projects, task board, task drawer, team, invites | Done |
-| Client portal: projects, shared tasks, file approval, conversation | Done |
-| Tests | 157 backend (26 DB rules, 2 migrations, 129 API) + 40 frontend, all passing |
-| Setup from a fresh clone | Verified: setup + `make check` in about 1.5 minutes (warm caches) |
-| Walkthrough video | To do |
-| Bonus: client intake forms, notifications | Not started |
+- Client intake forms
+- Notifications
+
+[ROADMAP.md](ROADMAP.md) has the full build history.
 
 ## Known limits
 
@@ -147,7 +141,3 @@ The required scope is complete. [ROADMAP.md](ROADMAP.md) has the step-by-step hi
 - **Files are stored on the local disk.** The storage code is kept separate, so S3 or similar could replace it easily.
 - **No rate limiting** on login yet.
 - **Tasks, comments, files and time entries can't be deleted,** and comments can't be edited after posting. For time entries this is on purpose, since reports depend on them.
-
-## How I used AI
-
-I used an AI coding assistant for explanations, setting up the project structure and repetitive code. The schema, the way agencies are kept apart, and the edge-case decisions are mine. `AGENTS.md` lists the security rules the assistant had to follow, for example never turning off the database's security rules and never taking the agency from the request. The database enforces every one of these rules, and the tests above check them.
