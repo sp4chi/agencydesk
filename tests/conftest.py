@@ -8,6 +8,7 @@ DATABASE_URL / ADMIN_DATABASE_URL (libpq conninfo strings).
 """
 import os
 import pathlib
+import re
 
 import psycopg
 import pytest
@@ -21,11 +22,20 @@ DSN = os.environ.get("DATABASE_URL", f"{PG} dbname=ad_test")
 os.environ.setdefault("SESSION_SECRET", "test-secret-" + "x" * 40)
 
 
-def api_database_url() -> str:
-    """SQLAlchemy URL for the test DB, logged in as agencydesk_api."""
+def _test_db_url(role: str, password: str) -> str:
     parts = psycopg.conninfo.conninfo_to_dict(DSN)
     host, port = parts.get("host", "localhost"), parts.get("port", "5432")
-    return f"postgresql+psycopg://agencydesk_api:dev-api-password@{host}:{port}/{parts['dbname']}"
+    return f"postgresql+psycopg://{role}:{password}@{host}:{port}/{parts['dbname']}"
+
+
+def api_database_url() -> str:
+    """SQLAlchemy URL for the test DB, logged in as agencydesk_api (RLS applies)."""
+    return _test_db_url("agencydesk_api", "dev-api-password")
+
+
+def auth_database_url() -> str:
+    """SQLAlchemy URL for the test DB, logged in as agencydesk_auth (login only)."""
+    return _test_db_url("agencydesk_auth", "dev-auth-password")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -37,8 +47,16 @@ def database():
     with psycopg.connect(DSN, autocommit=True) as c:
         c.execute((ROOT / "db/schema.sql").read_text())
         c.execute((ROOT / "db/dev_roles.sql").read_text())
-        # seed.sql uses a psql variable; substitute it for the driver
-        seed = (ROOT / "db/seed.sql").read_text()
-        seed = "\n".join(l for l in seed.splitlines() if not l.startswith("\\set"))
-        c.execute(seed.replace(":pw", "'x'"))
+        c.execute(seed_sql_for_driver())
     yield
+
+
+def seed_sql_for_driver() -> str:
+    """seed.sql uses a psql variable (`\\set pw '''<hash>'''` ... `:pw`).
+    psycopg doesn't understand psql meta-commands, so substitute it here,
+    keeping the real bcrypt hash so seeded users can log in."""
+    seed = (ROOT / "db/seed.sql").read_text()
+    match = re.search(r"^\\set pw '''(.+)'''$", seed, flags=re.MULTILINE)
+    assert match, "db/seed.sql must define the password hash with \\set pw"
+    seed = seed.replace(match.group(0), "")
+    return seed.replace(":pw", f"'{match.group(1)}'")
