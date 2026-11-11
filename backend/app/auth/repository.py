@@ -54,3 +54,33 @@ def active_membership(
         {"user_id": user_id, "is_staff": is_staff, "agency_id": agency_id},
     ).one_or_none()
     return MembershipRow(**row._asdict()) if row else None
+
+
+@dataclass(frozen=True)
+class AcceptedInvite:
+    user_id: uuid.UUID
+    agency_id: uuid.UUID
+    role: str
+
+
+def accept_invite(
+    conn: Connection,
+    token_hash: str,
+    acting_user_id: uuid.UUID | None,
+    name: str | None,
+    password_hash: str | None,
+) -> AcceptedInvite:
+    """Calls app.accept_invite, which does all the checks inside one locked
+    step. Raises the database error (SQLSTATE P0002 / 28000 / 22023) for the
+    service to translate."""
+    row = conn.execute(
+        text(
+            """SELECT out_user_id, out_agency_id, out_role
+               FROM app.accept_invite(:token_hash, :acting_user, :name, :password_hash)"""
+        ),
+        {
+            "token_hash": token_hash, "acting_user": acting_user_id,
+            "name": name, "password_hash": password_hash,
+        },
+    ).one()
+    return AcceptedInvite(user_id=row.out_user_id, agency_id=row.out_agency_id, role=row.out_role)

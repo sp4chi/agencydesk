@@ -1,15 +1,20 @@
-"""Login and agency selection. Thin: parse, call the service, map errors.
+"""Everything that runs on the login-only database pool (agencydesk_auth).
+Thin: parse, call the service, map errors.
 
 POST /auth/login          staff app login      -> identity token + staff memberships
 POST /auth/portal/login   client portal login  -> identity token + client memberships
 POST /auth/session        identity token + {agency_id} -> session token for that membership
+POST /invites/accept      invite token (+ identity token if the account exists)
+
+Keeping all of these in one router keeps the BYPASSRLS pool in one file
+(AGENTS.md rule 10, enforced by test_auth_pool_is_only_used_by_auth_code).
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import Connection
 
 from app.auth import service
-from app.auth.db import get_auth_db
+from app.auth.db import get_auth_db, get_auth_db_for_invite_accept
 from app.auth.repository import MembershipRow
 from app.auth.tokens import IdentityClaims, InvalidToken, LoginKind, verify_identity_token
 from app.config import Settings
@@ -20,8 +25,10 @@ from app.schemas.auth import (
     SessionRequest,
     SessionResponse,
 )
+from app.schemas.invites import InviteAccept, InviteAccepted
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+invite_accept_router = APIRouter(prefix="/invites", tags=["invites"])
 bearer = HTTPBearer(auto_error=False)
 
 
@@ -91,4 +98,28 @@ def select_agency(
         session_token=result.session_token,
         expires_in=result.expires_in,
         membership=_option(result.membership),
+    )
+
+
+def optional_identity(
+    request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)
+) -> IdentityClaims | None:
+    """No token -> None (logged out). A token that is present but bad -> 401,
+    never silently treated as logged out."""
+    if credentials is None:
+        return None
+    return require_identity(request, credentials)
+
+
+@invite_accept_router.post("/accept", response_model=InviteAccepted)
+def accept_invite(
+    body: InviteAccept,
+    identity: IdentityClaims | None = Depends(optional_identity),
+    conn: Connection = Depends(get_auth_db_for_invite_accept),
+) -> InviteAccepted:
+    accepted = service.accept_invite(conn, body.token, identity, body.name, body.password)
+    return InviteAccepted(
+        agency_id=accepted.agency_id,
+        role=accepted.role,
+        login="portal" if accepted.role == "client_user" else "staff",
     )

@@ -27,3 +27,16 @@ def get_auth_db(request: Request) -> Iterator[Connection]:
     with engine.connect() as conn, conn.begin():
         conn.execute(text("SET TRANSACTION READ ONLY"))
         yield conn
+
+
+def get_auth_db_for_invite_accept(request: Request) -> Iterator[Connection]:
+    """Writable transaction on the auth pool, for POST /invites/accept only.
+
+    It has to be writable because app.accept_invite inserts the user and
+    membership. agencydesk_auth itself has no INSERT/UPDATE grants, so the
+    only write it can make is through that function, which checks the token,
+    the lock and who is logged in.
+    """
+    engine: Engine = request.app.state.auth_engine
+    with engine.connect() as conn, conn.begin():
+        yield conn
