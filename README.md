@@ -125,9 +125,22 @@ ROADMAP.md             Build order and status
 AGENTS.md              Rules for AI coding assistants working in this repo
 ```
 
-## Status and known limits
+## Status
 
-The required scope is complete: schema and RLS, the API, the staff app and the client portal ([ROADMAP.md](ROADMAP.md) has the step-by-step history). Known limits:
+The required scope is complete. [ROADMAP.md](ROADMAP.md) has the step-by-step history, with commits and the bugs found along the way.
+
+| Area | State |
+| ---- | ----- |
+| Database: schema, RLS policies, triggers, seed, migrations | Done |
+| API: auth, invites, clients, projects, members, tasks, comments, files, time, dashboard | Done |
+| Staff app: projects, task board, task drawer, team, invites | Done |
+| Client portal: projects, shared tasks, file approval, conversation | Done |
+| Tests | 157 backend (26 DB rules, 2 migrations, 129 API) + 40 frontend, all passing |
+| Setup from a fresh clone | Verified: setup + `make check` in about 1.5 minutes (warm caches) |
+| Walkthrough video | To do |
+| Bonus: client intake forms, notifications | Not started |
+
+## Known limits
 
 - **Sessions don't survive a page refresh.** Tokens live in memory to keep them away from scripts. An httpOnly cookie would fix this, at the cost of CSRF protection.
 - **No email sending.** Creating an invite shows the admin a one-time link to pass on.

@@ -45,7 +45,6 @@ DESIGN.md                # required design write-up (keep to about half a page)
 ROADMAP.md               # build order + status
 ```
 
-Some of `backend/` and `frontend/` may not exist yet. Create them following this layout.
 
 ## Commands
 
