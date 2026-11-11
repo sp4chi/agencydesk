@@ -35,4 +35,19 @@ describe("token storage", () => {
       .map(([path]) => path);
     expect(offenders).toEqual([]);
   });
+
+  it("portal code never imports staff code (separate route trees)", () => {
+    const offenders = Object.entries(sources)
+      .filter(([path, code]) => path.startsWith("./portal/") && /from\s+["']\.\.\/staff\//.test(code))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+    expect(Object.keys(sources).some((path) => path.startsWith("./portal/"))).toBe(true);
+  });
+
+  it("portal code only uses the portal part of the API client", () => {
+    const offenders = Object.entries(sources)
+      .filter(([path, code]) => path.startsWith("./portal/") && /\bapi\.(?!portal\b)\w+/.test(code))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
 });
