@@ -47,13 +47,13 @@ Rules for every step:
 12. [x] **Time entries + hours summary:** `routers/time.py` (`e2945d4..f29e8ff`)
     Staff log their own time. Clients never receive raw entries.
     *Tests:* a client gets 404 on time entry endpoints; staff and client hour totals differ correctly.
-13. [x] **Project dashboard:** `GET /projects/{id}/dashboard`
+13. [x] **Project dashboard:** `GET /projects/{id}/dashboard` (`3e492c1..2f2889d`)
     Task counts by status plus `app.project_hours()`.
     *Tests:* the same project returns different numbers for staff and client, and both match the seed.
 
 ## Phase 3: Frontend (React + TS + Vite)
 
-14. [ ] **Scaffold + API client + auth flow:** `frontend/`
+14. [x] **Scaffold + API client + auth flow:** `frontend/`
     Login → agency picker (for multi-agency users) → app. Separate route trees: `/` for staff and `/portal` for clients. The token is held in memory or an httpOnly cookie, not localStorage.
 15. [ ] **Staff screens**
     Project list, task board grouped by status, task drawer (comments with the visibility toggle, files, time log), project members, invites.
@@ -89,5 +89,6 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2 complete (steps 5–13). 154 tests passing (26 DB rules, 2 migrations, 126 API).
-- Next: step 14 (frontend scaffold, API client, auth flow).
+- Phase 2 complete (steps 5–13). 154 backend tests passing (26 DB rules, 2 migrations, 126 API).
+- Phase 3: step 14 complete. 22 frontend tests passing; `make check` runs everything.
+- Next: step 15 (staff screens).
