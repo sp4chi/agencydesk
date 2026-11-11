@@ -948,3 +948,106 @@ def test_task_inputs_reject_agency_and_project_fields(client: TestClient, mark: 
                        json={"title": "X", "agency_id": str(NORTHWIND)}).status_code == 422
     assert client.patch(f"/tasks/{TASK_MOCKUPS}", headers=mark,
                         json={"project_id": GLOBEX_PROJECT}).status_code == 422
+
+
+# ================================================== step 10: comments
+CLIENT_COMMENT = "v2 uploaded, please review"
+INTERNAL_COMMENT = "INTERNAL: client keeps changing scope"
+
+
+def comments(client: TestClient, headers: dict, task_id: str):
+    return client.get(f"/tasks/{task_id}/comments", headers=headers)
+
+
+def post_comment(client: TestClient, headers: dict, task_id: str, body: str, visibility: str | None = None):
+    payload = {"body": body} if visibility is None else {"body": body, "visibility": visibility}
+    return client.post(f"/tasks/{task_id}/comments", headers=headers, json=payload)
+
+
+def test_internal_content_leaking_to_clients_via_comments(client: TestClient, ravi: dict) -> None:
+    resp = comments(client, ravi, TASK_MOCKUPS)
+    assert resp.status_code == 200
+    assert [c["body"] for c in resp.json()] == [CLIENT_COMMENT]
+    assert "INTERNAL" not in resp.text
+    assert all(set(c) == {"id", "body", "author_name", "created_at"} for c in resp.json())
+    # Comments on an internal task: the whole task is invisible, so 404.
+    assert comments(client, ravi, TASK_BUDGET).status_code == 404
+
+
+def test_staff_see_internal_and_client_comments_with_effective_visibility(
+    client: TestClient, alice: dict,
+) -> None:
+    by_body = {c["body"]: c for c in comments(client, alice, TASK_MOCKUPS).json()}
+    assert by_body[CLIENT_COMMENT]["visible_to_client"] is True
+    assert by_body[INTERNAL_COMMENT]["visible_to_client"] is False
+    assert by_body[INTERNAL_COMMENT]["visibility"] == "internal"
+
+
+def test_client_comment_is_always_client_visible(client: TestClient, ravi: dict, alice: dict) -> None:
+    resp = post_comment(client, ravi, TASK_MOCKUPS, "  Looks great, ship it  ", visibility="internal")
+    assert resp.status_code == 201
+    assert resp.json()["body"] == "Looks great, ship it"
+    staff_view = {c["body"]: c for c in comments(client, alice, TASK_MOCKUPS).json()}
+    assert staff_view["Looks great, ship it"]["visibility"] == "client"
+    assert staff_view["Looks great, ship it"]["author_name"] == "Ravi (in both)"
+    assert "Looks great, ship it" in [c["body"] for c in comments(client, ravi, TASK_MOCKUPS).json()]
+
+
+def test_staff_comment_defaults_to_internal_and_stays_hidden_from_client(
+    client: TestClient, mark: dict, ravi: dict,
+) -> None:
+    internal = post_comment(client, mark, TASK_MOCKUPS, "Client is slow to reply, chase Friday")
+    assert internal.status_code == 201
+    assert (internal.json()["visibility"], internal.json()["visible_to_client"]) == ("internal", False)
+    shared = post_comment(client, mark, TASK_MOCKUPS, "v3 is up", visibility="client")
+    assert shared.json()["visible_to_client"] is True
+    client_bodies = [c["body"] for c in comments(client, ravi, TASK_MOCKUPS).json()]
+    assert "v3 is up" in client_bodies
+    assert "Client is slow to reply, chase Friday" not in client_bodies
+
+
+def test_client_visible_comment_on_internal_task_stays_hidden(client: TestClient, mark: dict) -> None:
+    resp = post_comment(client, mark, TASK_BUDGET, "Shared note on an internal task", visibility="client")
+    assert resp.status_code == 201
+    assert resp.json()["visible_to_client"] is False     # comment AND task must both be client
+
+
+def test_flipping_task_to_internal_hides_its_comments(
+    client: TestClient, alice: dict, ravi: dict,
+) -> None:
+    assert post_comment(client, ravi, TASK_CONTENT, "When will this start?").status_code == 201
+    assert "When will this start?" in [c["body"] for c in comments(client, ravi, TASK_CONTENT).json()]
+    client.patch(f"/tasks/{TASK_CONTENT}", headers=alice, json={"visibility": "internal"})
+    try:
+        assert comments(client, ravi, TASK_CONTENT).status_code == 404
+        assert post_comment(client, ravi, TASK_CONTENT, "Hello?").status_code == 404
+        staff_view = comments(client, alice, TASK_CONTENT).json()
+        assert all(c["visible_to_client"] is False for c in staff_view)
+    finally:
+        client.patch(f"/tasks/{TASK_CONTENT}", headers=alice, json={"visibility": "client"})
+    assert "When will this start?" in [c["body"] for c in comments(client, ravi, TASK_CONTENT).json()]
+
+
+def test_client_cannot_comment_on_tasks_they_cannot_see(client: TestClient, ravi: dict) -> None:
+    for task_id in (TASK_BUDGET, TASK_GLOBEX, TASK_NW_SECRET, str(uuid.uuid4())):
+        assert post_comment(client, ravi, task_id, "Hi").status_code == 404
+
+
+def test_cross_tenant_comments_are_404(client: TestClient, alice: dict) -> None:
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    assert comments(client, bob, TASK_MOCKUPS).status_code == 404
+    assert post_comment(client, bob, TASK_MOCKUPS, "Hi from Northwind").status_code == 404
+    assert comments(client, alice, TASK_NW_SECRET).status_code == 404
+    assert "Hi from Northwind" not in comments(client, alice, TASK_MOCKUPS).text
+
+
+def test_member_cannot_comment_on_projects_they_are_not_on(client: TestClient, mark: dict) -> None:
+    assert comments(client, mark, TASK_GLOBEX).status_code == 404
+    assert post_comment(client, mark, TASK_GLOBEX, "Hi").status_code == 404
+
+
+@pytest.mark.parametrize("payload", [{"body": ""}, {"body": "   "}, {"body": "x", "visibility": "public"},
+                                     {"body": "x", "author_user_id": str(ALICE)}])
+def test_bad_comment_input_is_422(client: TestClient, mark: dict, payload: dict) -> None:
+    resp = client.post(f"/tasks/{TASK_MOCKUPS}/comments", headers=mark, json=payload)
+    assert resp.status_code == 422
