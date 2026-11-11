@@ -35,10 +35,10 @@ Rules for every step:
 8. [x] **Clients, projects, project members:** `routers/projects.py` (`ca1ccf7..197ed79`)
    Admin writes; reads are scoped by RLS.
    *Tests:* another tenant gets 404 by ID; a member sees only assigned projects; `DELETE /projects/{id}/members/{uid}` unassigns that person's tasks and logs the event, checked over HTTP.
-9. [x] **Tasks: list/filter/search, create, update:** `routers/tasks.py`, `schemas/tasks.py`
+9. [x] **Tasks: list/filter/search, create, update:** `routers/tasks.py`, `schemas/tasks.py` (`fb9c9d9..03a768b`)
    Use separate `StaffTask` and `ClientTask` response models. Support `?status=&priority=&assignee=&q=`.
    *Tests:* a client using `?q=` or `?status=` never gets an internal task; a client's create or status change fails; assigning someone outside the project gets 422.
-10. [ ] **Comments:** `routers/comments.py`
+10. [x] **Comments:** `routers/comments.py`
     A client's POST always gets `visibility=client`.
     *Tests:* a client never sees internal comments; flipping a task to internal hides its comments from the client.
 11. [ ] **Files: upload, download, review:** `routers/files.py`, `services/storage.py`
@@ -89,5 +89,5 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2: steps 5–9 complete. 110 tests passing (26 DB rules, 2 migrations, 82 API).
-- Next: step 10 (comments).
+- Phase 2: steps 5–10 complete. 123 tests passing (26 DB rules, 2 migrations, 95 API).
+- Next: step 11 (files: upload, download, review).
