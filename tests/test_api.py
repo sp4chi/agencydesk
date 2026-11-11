@@ -1257,3 +1257,112 @@ def test_file_row_without_stored_bytes_is_404_not_500(client: TestClient, alice:
     # Seed rows have no bytes in this test's upload dir.
     resp = client.get(f"/files/{FILE_INTERNAL}/download", headers=alice)
     assert resp.status_code == 404 and resp.json() == {"detail": "File content is missing"}
+
+
+# ======================================== step 12: time entries + hours
+def hours(client: TestClient, headers: dict, project: str = ACME_PROJECT):
+    return client.get(f"/projects/{project}/hours", headers=headers)
+
+
+def log(client: TestClient, headers: dict, task_id: str, minutes: int, note: str = "", **extra):
+    return client.post(f"/tasks/{task_id}/time-entries", headers=headers,
+                       json={"minutes": minutes, "note": note, **extra})
+
+
+def seeded_entry_id(user_id: uuid.UUID) -> str:
+    with psycopg.connect(DSN) as admin:
+        return str(admin.execute("SELECT id FROM time_entries WHERE user_id = %s ORDER BY created_at LIMIT 1",
+                                 (user_id,)).fetchone()[0])
+
+
+def test_staff_and_client_hour_totals_differ_correctly(
+    client: TestClient, alice: dict, ravi: dict, mark: dict,
+) -> None:
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    # Seed: 180 min on "Homepage mockups" (client-visible) + 120 min on the internal budget task.
+    assert hours(client, alice).json() == {"project_id": ACME_PROJECT, "total_hours": 5.0}
+    assert hours(client, ravi).json() == {"project_id": ACME_PROJECT, "total_hours": 3.0}
+
+    assert log(client, mark, TASK_MOCKUPS, 60).status_code == 201     # client-visible task
+    assert log(client, nina, TASK_BUDGET, 30).status_code == 201      # internal task
+    assert hours(client, alice).json()["total_hours"] == 6.5
+    assert hours(client, ravi).json()["total_hours"] == 4.0          # internal half hour not counted
+
+
+def test_hours_for_a_project_you_cannot_see_is_404(client: TestClient, ravi: dict) -> None:
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    assert hours(client, ravi, GLOBEX_PROJECT).status_code == 404     # other client's project
+    assert hours(client, bob).status_code == 404                      # other agency
+    assert hours(client, nina, GLOBEX_PROJECT).status_code == 404     # member not on it
+    assert hours(client, ravi, str(uuid.uuid4())).status_code == 404
+
+
+def test_internal_content_leaking_to_clients_via_time_entries(client: TestClient, ravi: dict) -> None:
+    # Every time-entry endpoint is 404 for a client, even on a client-visible task.
+    mark_entry = seeded_entry_id(MARK)
+    responses = [
+        client.get(f"/tasks/{TASK_MOCKUPS}/time-entries", headers=ravi),
+        client.get(f"/tasks/{TASK_BUDGET}/time-entries", headers=ravi),
+        log(client, ravi, TASK_MOCKUPS, 30, "client trying to log time"),
+        client.patch(f"/time-entries/{mark_entry}", headers=ravi, json={"minutes": 1}),
+    ]
+    assert [r.status_code for r in responses] == [404, 404, 404, 404]
+    for resp in responses:
+        assert "mockup v2" not in resp.text and "firefighting" not in resp.text
+    with psycopg.connect(DSN) as admin:
+        assert admin.execute("SELECT count(*) FROM time_entries WHERE user_id = %s", (RAVI,)).fetchone()[0] == 0
+
+
+def test_staff_log_their_own_time_only(client: TestClient, mark: dict, alice: dict) -> None:
+    resp = log(client, mark, TASK_MOCKUPS, 45, "  call with client  ")
+    assert resp.status_code == 201
+    entry = resp.json()
+    assert (entry["user_id"], entry["minutes"], entry["note"]) == (str(MARK), 45, "call with client")
+    # No way to log on someone else's behalf.
+    assert log(client, mark, TASK_MOCKUPS, 10, user_id=str(NINA)).status_code == 422
+    assert entry["id"] in [e["id"] for e in client.get(f"/tasks/{TASK_MOCKUPS}/time-entries", headers=alice).json()]
+
+
+@pytest.mark.parametrize("minutes", [0, -5, 1441])
+def test_minutes_must_be_between_1_and_1440(client: TestClient, mark: dict, minutes: int) -> None:
+    assert log(client, mark, TASK_MOCKUPS, minutes).status_code == 422
+
+
+def test_entry_date_defaults_to_today_and_can_be_set(client: TestClient, mark: dict) -> None:
+    today = log(client, mark, TASK_MOCKUPS, 15).json()
+    with psycopg.connect(DSN) as admin:
+        db_today = admin.execute("SELECT current_date").fetchone()[0]
+    assert today["entry_date"] == db_today.isoformat()
+    dated = log(client, mark, TASK_MOCKUPS, 15, entry_date="2026-11-01").json()
+    assert dated["entry_date"] == "2026-11-01"
+
+
+def test_editing_time_entries_own_or_admin(client: TestClient, mark: dict, alice: dict) -> None:
+    nina = session_headers(client, "nina@pixel.test", PIXEL)
+    entry_id = log(client, mark, TASK_MOCKUPS, 30).json()["id"]
+    assert client.patch(f"/time-entries/{entry_id}", headers=mark,
+                        json={"minutes": 40, "note": "fixed"}).json()["minutes"] == 40
+    assert client.patch(f"/time-entries/{entry_id}", headers=nina, json={"minutes": 1}).status_code == 403
+    assert client.patch(f"/time-entries/{entry_id}", headers=alice, json={"minutes": 50}).json()["minutes"] == 50
+    for bad in ({"user_id": str(NINA)}, {"task_id": TASK_CONTENT}, {"minutes": None}, {"minutes": 2000}):
+        assert client.patch(f"/time-entries/{entry_id}", headers=mark, json=bad).status_code == 422
+
+
+def test_time_entries_cannot_be_deleted(client: TestClient, alice: dict) -> None:
+    entry_id = seeded_entry_id(MARK)
+    assert client.delete(f"/time-entries/{entry_id}", headers=alice).status_code == 405
+
+
+def test_member_cannot_log_time_on_projects_they_are_not_on(client: TestClient, mark: dict) -> None:
+    assert log(client, mark, TASK_GLOBEX, 30).status_code == 404
+    assert client.get(f"/tasks/{TASK_GLOBEX}/time-entries", headers=mark).status_code == 404
+
+
+def test_cross_tenant_time_entries_are_404(client: TestClient, alice: dict) -> None:
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    assert client.get(f"/tasks/{TASK_MOCKUPS}/time-entries", headers=bob).status_code == 404
+    assert log(client, bob, TASK_MOCKUPS, 30).status_code == 404
+    assert client.patch(f"/time-entries/{seeded_entry_id(MARK)}", headers=bob,
+                        json={"minutes": 1}).status_code == 404
+    assert client.get(f"/tasks/{TASK_NW_SECRET}/time-entries", headers=alice).status_code == 404

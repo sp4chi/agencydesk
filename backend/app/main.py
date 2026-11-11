@@ -17,7 +17,7 @@ from app.auth.db import create_auth_engine
 from app.config import Settings
 from app.db import create_api_engine
 from app.errors import ServiceError
-from app.routers import auth, clients, comments, files, invites, me, projects, tasks
+from app.routers import auth, clients, comments, files, invites, me, projects, tasks, time
 from app.services.storage import LocalDiskStorage
 
 INSUFFICIENT_PRIVILEGE = "42501"  # includes "new row violates row-level security policy"
@@ -66,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(comments.router)
     app.include_router(files.router)
+    app.include_router(time.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
