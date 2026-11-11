@@ -1,0 +1,228 @@
+"""
+API-level tests against a real Postgres (no mocks), through FastAPI's TestClient.
+
+Step 5 covers get_tenant_db: token checks, membership re-load, the RLS
+context it sets, and the guarantee that a pooled connection never carries
+one request's identity into the next.
+"""
+import pathlib
+import uuid
+
+import psycopg
+import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+
+from app.auth.tokens import issue_session_token
+from app.config import Settings
+from app.db import TenantDb, get_tenant_db
+from app.main import create_app
+from conftest import DSN, api_database_url
+
+PIXEL = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
+NORTHWIND = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000001")
+ALICE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")   # Pixel admin
+BOB = uuid.UUID("00000000-0000-0000-0000-0000000000b1")     # Northwind admin
+RAVI = uuid.UUID("00000000-0000-0000-0000-0000000000c1")    # client_user at both
+ACME = "aaaaaaaa-0000-0000-0001-000000000001"
+INITECH = "bbbbbbbb-0000-0000-0001-000000000001"
+TASK_NW_SECRET = "bbbbbbbb-0000-0000-0003-000000000001"
+
+SECRET = "api-test-secret-" + "y" * 40
+
+
+# ---------------------------------------------------------------- fixtures
+@pytest.fixture(scope="module")
+def app() -> FastAPI:
+    settings = Settings(api_database_url=api_database_url(), session_secret=SECRET)
+    app = create_app(settings)
+    # One pooled connection, so consecutive requests provably reuse it.
+    app.state.api_engine.dispose()
+    app.state.api_engine = create_engine(settings.api_database_url, pool_size=1, max_overflow=0)
+
+    # Test-only routes that expose what get_tenant_db set up.
+    @app.get("/_test/context")
+    def context(db: TenantDb = Depends(get_tenant_db)) -> dict:
+        row = db.conn.execute(text(
+            """SELECT current_user,
+                      current_setting('app.agency_id', true) AS agency_id,
+                      current_setting('app.user_id', true)   AS user_id,
+                      current_setting('app.role', true)      AS role,
+                      current_setting('app.client_id', true) AS client_id"""
+        )).one()
+        return {**row._asdict(), "dep_role": db.role, "dep_client_id": str(db.client_id or "")}
+
+    @app.get("/_test/tasks")
+    def tasks(db: TenantDb = Depends(get_tenant_db)) -> list[str]:
+        # Deliberately no WHERE agency_id: RLS alone must scope this.
+        return [str(r[0]) for r in db.conn.execute(text("SELECT id FROM tasks"))]
+
+    @app.get("/_test/boom")
+    def boom(db: TenantDb = Depends(get_tenant_db)) -> None:
+        raise RuntimeError("route failed mid-transaction")
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def client(app: FastAPI) -> TestClient:
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def token(user_id: uuid.UUID, agency_id: uuid.UUID, secret: str = SECRET, ttl: int = 600) -> dict:
+    return {"Authorization": f"Bearer {issue_session_token(user_id, agency_id, secret, ttl)}"}
+
+
+def assert_pooled_connection_is_clean(app: FastAPI) -> None:
+    """Check out the (only) pooled connection and confirm no context survived."""
+    with app.state.api_engine.connect() as conn:
+        row = conn.execute(text(
+            """SELECT current_user,
+                      coalesce(current_setting('app.agency_id', true), ''),
+                      coalesce(current_setting('app.user_id', true), ''),
+                      coalesce(current_setting('app.role', true), ''),
+                      coalesce(current_setting('app.client_id', true), '')"""
+        )).one()
+        assert tuple(row) == ("agencydesk_api", "", "", "", "")
+        # And with no context, RLS shows nothing.
+        assert conn.execute(text("SELECT count(*) FROM tasks")).scalar() == 0
+
+
+# ------------------------------------------------------------------ health
+def test_health(client: TestClient) -> None:
+    assert client.get("/health").json() == {"status": "ok"}
+
+
+# ------------------------------------------------------ token verification
+@pytest.mark.parametrize("headers", [
+    {},                                                  # no header
+    {"Authorization": "Bearer not-a-token"},             # garbage
+    {"Authorization": "Basic YWxpY2U6cGFzc3dvcmQ="},     # wrong scheme
+])
+def test_missing_or_malformed_token_is_401(client: TestClient, headers: dict) -> None:
+    assert client.get("/_test/context", headers=headers).status_code == 401
+
+
+def test_token_signed_with_another_secret_is_401(client: TestClient) -> None:
+    forged = token(ALICE, PIXEL, secret="attacker-secret-" + "z" * 40)
+    assert client.get("/_test/context", headers=forged).status_code == 401
+
+
+def test_tampered_token_is_401(client: TestClient) -> None:
+    good = issue_session_token(ALICE, PIXEL, SECRET, 600)
+    payload, sig = good.split(".")
+    # Re-use Alice's signature on a payload claiming Northwind.
+    other_payload = issue_session_token(ALICE, NORTHWIND, SECRET, 600).split(".")[0]
+    resp = client.get("/_test/context", headers={"Authorization": f"Bearer {other_payload}.{sig}"})
+    assert resp.status_code == 401
+
+
+def test_expired_token_is_401(client: TestClient) -> None:
+    assert client.get("/_test/context", headers=token(ALICE, PIXEL, ttl=-1)).status_code == 401
+
+
+# ---------------------------------------------------------- context setup
+def test_context_comes_from_membership_row(client: TestClient) -> None:
+    body = client.get("/_test/context", headers=token(ALICE, PIXEL)).json()
+    assert body == {
+        "current_user": "agencydesk_api",
+        "agency_id": str(PIXEL), "user_id": str(ALICE),
+        "role": "agency_admin", "client_id": "",
+        "dep_role": "agency_admin", "dep_client_id": "",
+    }
+
+
+def test_api_pool_role_is_not_superuser_and_cannot_bypass_rls(app: FastAPI) -> None:
+    with app.state.api_engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = session_user"
+        )).one()
+        assert tuple(row) == ("agencydesk_api", False, False)
+
+
+# ------------------------------------------------- edge: cross-tenant access
+def test_cross_tenant_token_for_agency_you_are_not_in_is_401(client: TestClient) -> None:
+    # Bob is a real user with a validly signed token, but has no Pixel membership.
+    assert client.get("/_test/context", headers=token(BOB, PIXEL)).status_code == 401
+
+
+def test_cross_tenant_rls_scopes_queries_without_where_clause(client: TestClient) -> None:
+    assert client.get("/_test/tasks", headers=token(BOB, NORTHWIND)).json() == [TASK_NW_SECRET]
+    assert TASK_NW_SECRET not in client.get("/_test/tasks", headers=token(ALICE, PIXEL)).json()
+
+
+# ---------------------------------------- edge: one person in two agencies
+def test_one_person_in_two_agencies_each_token_gets_that_agencys_membership(
+    client: TestClient,
+) -> None:
+    # Ravi is a client_user at both agencies, for a different client in each.
+    # This also proves the "read your own membership row" policy: without it,
+    # a client_user's row is invisible during the lookup and this would be 401.
+    at_pixel = client.get("/_test/context", headers=token(RAVI, PIXEL)).json()
+    at_northwind = client.get("/_test/context", headers=token(RAVI, NORTHWIND)).json()
+    assert (at_pixel["agency_id"], at_pixel["role"], at_pixel["client_id"]) == (
+        str(PIXEL), "client_user", ACME)
+    assert (at_northwind["agency_id"], at_northwind["role"], at_northwind["client_id"]) == (
+        str(NORTHWIND), "client_user", INITECH)
+
+
+# -------------------------------------------- removed membership takes effect
+def test_removed_membership_gets_401_on_next_request(client: TestClient) -> None:
+    headers = token(RAVI, PIXEL)
+    assert client.get("/_test/context", headers=headers).status_code == 200
+    with psycopg.connect(DSN, autocommit=True) as admin:
+        admin.execute(
+            "UPDATE agency_memberships SET removed_at = now() WHERE agency_id = %s AND user_id = %s",
+            (PIXEL, RAVI))
+        try:
+            # Same, still-unexpired token: rejected because the row is re-read.
+            assert client.get("/_test/context", headers=headers).status_code == 401
+            # His other agency is unaffected.
+            assert client.get("/_test/context", headers=token(RAVI, NORTHWIND)).status_code == 200
+        finally:
+            admin.execute(
+                "UPDATE agency_memberships SET removed_at = NULL WHERE agency_id = %s AND user_id = %s",
+                (PIXEL, RAVI))
+
+
+# ------------------------------------------------ no context leaks via pool
+def test_context_does_not_leak_to_next_use_of_pooled_connection(
+    app: FastAPI, client: TestClient,
+) -> None:
+    assert client.get("/_test/context", headers=token(ALICE, PIXEL)).status_code == 200
+    assert_pooled_connection_is_clean(app)
+
+
+def test_context_does_not_leak_after_a_failed_request(app: FastAPI, client: TestClient) -> None:
+    assert client.get("/_test/boom", headers=token(ALICE, PIXEL)).status_code == 500
+    assert_pooled_connection_is_clean(app)
+
+
+def test_context_does_not_leak_after_a_rejected_membership(
+    app: FastAPI, client: TestClient,
+) -> None:
+    # get_tenant_db had already set agency_id/user_id before finding no membership.
+    assert client.get("/_test/context", headers=token(BOB, PIXEL)).status_code == 401
+    assert_pooled_connection_is_clean(app)
+
+
+def test_back_to_back_requests_for_different_tenants_on_one_connection(
+    client: TestClient,
+) -> None:
+    for _ in range(3):
+        assert client.get("/_test/context", headers=token(ALICE, PIXEL)).json()["agency_id"] == str(PIXEL)
+        assert client.get("/_test/context", headers=token(BOB, NORTHWIND)).json()["agency_id"] == str(NORTHWIND)
+
+
+# ------------------------------------------- rule 4: one place sets context
+def test_request_context_is_set_only_in_get_tenant_db() -> None:
+    backend = pathlib.Path(__file__).resolve().parent.parent / "backend" / "app"
+    offenders = [
+        str(path.relative_to(backend))
+        for path in backend.rglob("*.py")
+        if path.name != "db.py"
+        and ("set_config" in path.read_text() or "SET LOCAL" in path.read_text().upper()
+             or "SET ROLE" in path.read_text().upper())
+    ]
+    assert offenders == []

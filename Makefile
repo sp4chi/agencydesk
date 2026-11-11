@@ -4,24 +4,31 @@ VENV   := .venv
 BIN    := $(VENV)/bin
 PSQL   := docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 -q
 
-.PHONY: install db-up db-wait db-reset migrate seed test
+.PHONY: install env db-up db-reset migrate seed run test
 
 install:                 ## create .venv and install backend deps
 	$(PYTHON) -m venv $(VENV)
 	$(BIN)/pip install -q -r backend/requirements.txt
 
+env:                     ## create .env from .env.example with a random SESSION_SECRET
+	$(PYTHON) scripts/make_env.py
+
 db-up:                   ## start Postgres
 	docker compose up -d --wait db
 
-db-reset: db-up          ## drop + recreate the dev DB, run migrations, load seed
+db-reset: db-up          ## drop + recreate the dev DB, run migrations, load seed + dev role passwords
 	$(PSQL) -d postgres -c 'DROP DATABASE IF EXISTS agencydesk WITH (FORCE)' -c 'CREATE DATABASE agencydesk'
 	$(MAKE) migrate seed
+	$(PSQL) -d agencydesk < db/dev_roles.sql
 
 migrate:                 ## alembic upgrade head
 	cd backend && ../$(BIN)/alembic upgrade head
 
 seed:                    ## load db/seed.sql into the dev DB
 	$(PSQL) -d agencydesk < db/seed.sql
+
+run:                     ## start the API on http://localhost:8000 (needs .env: `make env`)
+	cd backend && ../$(BIN)/uvicorn app.main:create_app --factory --env-file ../.env --reload
 
 test: db-up              ## run all tests (they create/drop their own databases)
 	$(BIN)/pytest -q

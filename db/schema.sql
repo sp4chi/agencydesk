@@ -326,9 +326,12 @@ END $$;
 CREATE POLICY read  ON clients FOR SELECT USING (app.can_see_client(id));
 CREATE POLICY write ON clients FOR ALL USING (app.role() = 'agency_admin') WITH CHECK (app.role() = 'agency_admin');
 
--- memberships: staff see the whole team; a client sees staff + contacts of their own client
+-- memberships: staff see the whole team; a client sees staff + contacts of their own client.
+-- Everyone can also see their own row: get_tenant_db reads it (under RLS) after setting only
+-- app.agency_id + app.user_id from the verified token, to learn the role and client_id.
+-- Once the context is fully set, this exposes nothing the other branches don't already show.
 CREATE POLICY read ON agency_memberships FOR SELECT USING (
-  app.is_staff() OR is_staff OR client_id = app.client_id());
+  app.is_staff() OR is_staff OR client_id = app.client_id() OR user_id = app.user_id());
 CREATE POLICY write ON agency_memberships FOR ALL
   USING (app.role() = 'agency_admin') WITH CHECK (app.role() = 'agency_admin');
 

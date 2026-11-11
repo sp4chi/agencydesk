@@ -23,7 +23,7 @@ Rules for every step:
 
 ## Phase 2: Backend (FastAPI)
 
-5. [ ] **App skeleton + `get_tenant_db`:** `backend/app/main.py`, `backend/app/db.py`, `backend/app/config.py`
+5. [x] **App skeleton + `get_tenant_db`:** `backend/app/main.py`, `backend/app/db.py`, `backend/app/config.py`
    This is the single place that sets `SET LOCAL ROLE` and the `app.*` context. Also add a `GET /health` endpoint.
    *Test:* after a request finishes, the next transaction on the same pooled connection sees an empty `app.agency_id`. This proves no context leaks between requests.
 6. [ ] **Auth: login, agency selection, `/me`:** `backend/app/auth/`
@@ -87,7 +87,10 @@ Record each real bug here as it happens: what happened, the root cause, the fix,
 | # | Step | Symptom | Root cause | Fix (commit) |
 |---|---|---|---|---|
 | 1 | 3 | `app.accept_invite` failed: "column reference agency_id is ambiguous" | The function's `RETURNS TABLE` output columns share names with table columns, and PL/pgSQL can't tell which one `ON CONFLICT (agency_id, user_id)` means | Renamed the outputs to `out_*` and used `ON CONFLICT ON CONSTRAINT agency_memberships_pkey` |
+| 2 | 5 | Designing `get_tenant_db`: a `client_user` (e.g. Ravi) could never authenticate when the membership lookup ran as `agencydesk_api` | Chicken-and-egg: RLS hides membership rows until `app.role` / `app.client_id` are set, but those values *come from* the membership row. Staff rows happened to be visible (`is_staff` branch), client rows weren't. The tests hid this because they look up memberships as `postgres` | Added `OR user_id = app.user_id()` to the `agency_memberships` read policy (migration 0002), so the lookup stays under RLS instead of using a BYPASSRLS role. A test fails if the branch is removed (step 5 commit) |
 
 ## Status
 
-Phase 1 is complete (steps 1–4). `docker compose up -d && make db-reset && make test` gives 22/22 passing on a fresh volume (20 DB rule tests + 2 migration tests: `alembic upgrade head` matches `db/schema.sql`, and downgrade/upgrade round-trips). Next up is step 5.
+Phase 1 is complete (steps 1–4). `docker compose up -d && make db-reset && make test` gives 22/22 passing on a fresh volume (20 DB rule tests + 2 migration tests: `alembic upgrade head` matches `db/schema.sql`, and downgrade/upgrade round-trips).
+
+Step 5 is done: 40/40 tests pass. The 18 new API tests in `tests/test_api.py` cover token checks, membership re-load, RLS-scoped queries, Ravi in two agencies, and no context leaking through the connection pool (including after a failed request). Next up is step 6.

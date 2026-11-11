@@ -36,19 +36,7 @@ NINA = "00000000-0000-0000-0000-0000000000a3"
 
 
 # ---------------------------------------------------------------- fixtures
-@pytest.fixture(scope="session", autouse=True)
-def database():
-    dbname = psycopg.conninfo.conninfo_to_dict(DSN)["dbname"]
-    with psycopg.connect(ADMIN_DSN, autocommit=True) as c:
-        c.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
-        c.execute(f'CREATE DATABASE "{dbname}"')
-    with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute((ROOT / "db/schema.sql").read_text())
-        # seed.sql uses a psql variable; substitute it for the driver
-        seed = (ROOT / "db/seed.sql").read_text()
-        seed = "\n".join(l for l in seed.splitlines() if not l.startswith("\\set"))
-        c.execute(seed.replace(":pw", "'x'"))
-    yield
+# The ad_test database itself is built once per run in tests/conftest.py.
 
 
 @pytest.fixture

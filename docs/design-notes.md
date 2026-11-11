@@ -65,14 +65,18 @@ A compromised API server could `SET LOCAL app.agency_id` to anything. RLS protec
 
 ```
 Browser ──Bearer token {user_id, agency_id}──▶ FastAPI
-  1. verify token signature/expiry
-  2. load membership (user_id, agency_id) WHERE removed_at IS NULL   → 401 if gone
-  3. BEGIN
+  1. verify token signature/expiry                                   → 401 if bad
+  2. BEGIN  (pool logs in as agencydesk_api: not owner, no BYPASSRLS)
      SET LOCAL ROLE agencydesk_api
-     set_config('app.agency_id' | 'app.user_id' | 'app.role' | 'app.client_id', ..., true)
-  4. route → service → repository (plain queries, no tenant filters needed)
-  5. COMMIT / ROLLBACK  (settings vanish with the transaction)
+     set_config('app.agency_id' | 'app.user_id', <from token>, true)
+  3. load membership (user_id, agency_id) WHERE removed_at IS NULL   → 401 if gone
+     (runs under RLS; the "own row" branch of the agency_memberships read policy)
+  4. set_config('app.role' | 'app.client_id', <from membership row>, true)
+  5. route → service → repository (plain queries, no tenant filters needed)
+  6. COMMIT / ROLLBACK  (settings vanish with the transaction)
 ```
+
+**Why the membership lookup runs under RLS.** The tenant policy hides every row until the context is set, but the context needs the role, which lives in a row. Rather than doing the lookup with a role that skips RLS, the `agency_memberships` read policy has one extra branch: `user_id = app.user_id()`, meaning "you can always see your own membership". Once the full context is set, that branch reveals nothing the other branches don't already show. Without it, a `client_user`'s own row is hidden during the lookup (their `client_id` isn't known yet) and they could never authenticate. `tests/test_api.py` proves this.
 
 - The agency comes from the **token**, never from the URL or the body. So `/projects/{id}` with another tenant's id simply returns 404.
 - Return **404, not 403**, for rows you can't see, so you don't confirm the row exists.

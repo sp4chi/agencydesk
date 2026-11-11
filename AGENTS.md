@@ -39,19 +39,22 @@ Some of `backend/` and `frontend/` may not exist yet. Create them following this
 
 ```bash
 make install     # create .venv and install backend deps (Python 3.12+)
+make env         # create .env from .env.example with a random SESSION_SECRET
 make db-reset    # start Postgres in Docker (host port 5433), drop + recreate `agencydesk`,
-                 # alembic upgrade head, load db/seed.sql
+                 # alembic upgrade head, load db/seed.sql + db/dev_roles.sql
 make migrate     # alembic upgrade head only
+make run         # API on http://localhost:8000 (uvicorn app.main:create_app --factory)
 make test        # pytest -q; tests create/drop their own databases (ad_test*)
 ```
 
 Defaults match `docker-compose.yml`; override with the variables in `.env.example`
-(`MIGRATION_DATABASE_URL` is a SQLAlchemy URL; `DATABASE_URL` / `ADMIN_DATABASE_URL` are libpq conninfo strings for the tests).
+(`MIGRATION_DATABASE_URL` / `API_DATABASE_URL` are SQLAlchemy URLs; `DATABASE_URL` / `ADMIN_DATABASE_URL` are libpq conninfo strings for the tests).
+The app refuses to start without a real `SESSION_SECRET`. `db/dev_roles.sql` sets dev-only passwords for `agencydesk_api` / `agencydesk_auth`; never run it in production.
 
 Migrations: `backend/migrations/versions/`. Revision `0001_baseline` runs a frozen copy of `db/schema.sql`.
 New schema changes go in `db/schema.sql` **and** a new revision; `tests/test_migrations.py` fails if they drift.
 
-Add the backend run and frontend commands here once they exist.
+Add the frontend commands here once they exist.
 
 ---
 
