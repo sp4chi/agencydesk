@@ -39,9 +39,14 @@ class Conflict(ServiceError):
     status_code = 409
 
 
+class PayloadTooLarge(ServiceError):
+    status_code = 413
+
+
 # Postgres error codes services translate into the errors above.
 FOREIGN_KEY_VIOLATION = "23503"
 UNIQUE_VIOLATION = "23505"
+CHECK_VIOLATION = "23514"
 
 
 def sqlstate(exc: Exception) -> str | None:

@@ -4,10 +4,13 @@ The app refuses to start with a missing or placeholder session secret,
 so a forgotten config can never ship with a guessable signing key.
 """
 import os
+import pathlib
 from dataclasses import dataclass
 
 PLACEHOLDER_SECRETS = {"", "change-me"}
 MIN_SECRET_LENGTH = 32
+# <repo>/uploads (gitignored). Never served directly; see app/services/storage.py.
+DEFAULT_UPLOAD_DIR = pathlib.Path(__file__).resolve().parents[2] / "uploads"
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,8 @@ class Settings:
     invite_ttl_days: int = 7
     # Frontend origin, used to build invite links handed to the admin.
     app_base_url: str = "http://localhost:5173"
+    upload_dir: pathlib.Path = DEFAULT_UPLOAD_DIR
+    max_upload_bytes: int = 25 * 1024 * 1024
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -44,4 +49,6 @@ class Settings:
             session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", 12 * 60 * 60)),
             invite_ttl_days=int(os.environ.get("INVITE_TTL_DAYS", 7)),
             app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:5173").rstrip("/"),
+            upload_dir=pathlib.Path(os.environ.get("UPLOAD_DIR", DEFAULT_UPLOAD_DIR)),
+            max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)),
         )
