@@ -8,11 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from app.auth.tokens import new_invite_token
 from app.config import Settings
 from app.db import TenantDb
-from app.errors import Conflict, Forbidden, Invalid, NotFound
+from app.errors import FOREIGN_KEY_VIOLATION, Conflict, Forbidden, Invalid, NotFound, sqlstate
 from app.repositories import invites as repository
 from app.repositories.invites import InviteRow
-
-FOREIGN_KEY_VIOLATION = "23503"
 
 
 @dataclass(frozen=True)
@@ -60,7 +58,7 @@ def create_invite(
             settings.invite_ttl_days,
         )
     except IntegrityError as exc:
-        if getattr(exc.orig, "sqlstate", None) == FOREIGN_KEY_VIOLATION:
+        if sqlstate(exc) == FOREIGN_KEY_VIOLATION:
             # The composite FK (agency_id, client_id) rejects other tenants' clients too.
             raise Invalid("Unknown client") from None
         raise

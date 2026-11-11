@@ -37,3 +37,13 @@ class NotFound(ServiceError):
 
 class Conflict(ServiceError):
     status_code = 409
+
+
+# Postgres error codes services translate into the errors above.
+FOREIGN_KEY_VIOLATION = "23503"
+UNIQUE_VIOLATION = "23505"
+
+
+def sqlstate(exc: Exception) -> str | None:
+    """The Postgres error code behind a SQLAlchemy DBAPIError, if any."""
+    return getattr(getattr(exc, "orig", None), "sqlstate", None)
