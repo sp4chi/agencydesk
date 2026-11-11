@@ -12,7 +12,7 @@ import {
   type Identity,
 } from "./sessionState";
 
-interface SessionContextValue {
+export interface SessionContextValue {
   identity: Identity | null;
   session: ActiveSession | null;
   api: Api | null;
@@ -23,7 +23,8 @@ interface SessionContextValue {
   logout: () => void;
 }
 
-const SessionContext = createContext<SessionContextValue | null>(null);
+// Exported so component tests can provide a fake session and api.
+export const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
