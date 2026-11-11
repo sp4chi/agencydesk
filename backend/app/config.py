@@ -19,6 +19,9 @@ class Settings:
     # HMAC key for identity and session tokens.
     session_secret: str
     session_ttl_seconds: int = 12 * 60 * 60
+    invite_ttl_days: int = 7
+    # Frontend origin, used to build invite links handed to the admin.
+    app_base_url: str = "http://localhost:5173"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -39,4 +42,6 @@ class Settings:
             ),
             session_secret=secret,
             session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", 12 * 60 * 60)),
+            invite_ttl_days=int(os.environ.get("INVITE_TTL_DAYS", 7)),
+            app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:5173").rstrip("/"),
         )

@@ -18,6 +18,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -122,3 +123,16 @@ def verify_identity_token(token: str, secret: str) -> IdentityClaims:
         )
     except (ValueError, KeyError, TypeError):
         raise InvalidToken("bad payload") from None
+
+
+# -------------------------------------------------------------- invites
+# Invite tokens are random, not signed: the database stores only their
+# SHA-256 hash (invites.token_hash), so a DB leak hands out no working links.
+def new_invite_token() -> tuple[str, str]:
+    """Returns (raw token for the link, hash to store)."""
+    raw = secrets.token_urlsafe(32)
+    return raw, hash_invite_token(raw)
+
+
+def hash_invite_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
