@@ -6,8 +6,11 @@ context it sets, and the guarantee that a pooled connection never carries
 one request's identity into the next.
 
 Step 6 covers login (staff and portal), agency selection and GET /me.
+
+Step 7 covers invites: create, resend, revoke, accept.
 """
 import pathlib
+import threading
 import uuid
 
 import psycopg
@@ -67,6 +70,14 @@ def app() -> FastAPI:
     @app.get("/_test/boom")
     def boom(db: TenantDb = Depends(get_tenant_db)) -> None:
         raise RuntimeError("route failed mid-transaction")
+
+    @app.post("/_test/write-invite-skipping-service")
+    def write_invite(db: TenantDb = Depends(get_tenant_db)) -> None:
+        # Simulates a service that forgot its role check: RLS must refuse.
+        db.conn.execute(text(
+            """INSERT INTO invites (agency_id, email, role, token_hash, invited_by, expires_at)
+               VALUES (:agency, 'sneaky@acme.test', 'agency_admin', :hash, :user, now())"""
+        ), {"agency": db.agency_id, "hash": uuid.uuid4().hex, "user": db.user_id})
 
     return app
 
@@ -403,3 +414,199 @@ def test_auth_pool_is_only_used_by_auth_code() -> None:
         and any(marker in path.read_text() for marker in markers)
     ]
     assert offenders == []
+
+
+# ========================================================= step 7: invites
+MARK = uuid.UUID("00000000-0000-0000-0000-0000000000a2")    # Pixel member
+
+
+def new_email() -> str:
+    return f"invitee-{uuid.uuid4().hex[:8]}@acme.test"
+
+
+def create_invite(client: TestClient, admin: dict, email: str, role: str = "client_user",
+                  client_id: str | None = ACME):
+    return client.post("/invites", headers=admin,
+                       json={"email": email, "role": role, "client_id": client_id})
+
+
+def token_from(resp) -> str:
+    return resp.json()["invite_url"].split("#token=")[1]
+
+
+def accept(client: TestClient, token: str, name: str | None = "New Person",
+           password: str | None = "a-good-password", identity: str | None = None):
+    headers = {"Authorization": f"Bearer {identity}"} if identity else {}
+    return client.post("/invites/accept", headers=headers,
+                       json={"token": token, "name": name, "password": password})
+
+
+@pytest.fixture
+def alice(client: TestClient) -> dict:
+    return session_headers(client, "alice@pixel.test", PIXEL)
+
+
+def test_admin_creates_invite_and_gets_link_without_token_hash(client: TestClient, alice: dict) -> None:
+    email = new_email()
+    resp = create_invite(client, alice, email)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["invite"]["email"] == email and body["invite"]["status"] == "pending"
+    assert body["invite_url"].startswith("http://localhost:5173/invite#token=")
+    assert "token_hash" not in resp.text
+    listed = client.get("/invites", headers=alice).json()
+    assert body["invite"]["id"] in [i["id"] for i in listed]
+    assert "token" not in client.get("/invites", headers=alice).text
+
+
+def test_invite_races_resend_reuses_row_and_old_link_stops_working(
+    client: TestClient, alice: dict,
+) -> None:
+    email = new_email()
+    first = create_invite(client, alice, email)
+    invite_id = first.json()["invite"]["id"]
+    resent = client.post(f"/invites/{invite_id}/resend", headers=alice)
+    again = create_invite(client, alice, email)          # "invite" twice = resend too
+    assert resent.status_code == 200 and again.status_code == 201
+    assert resent.json()["invite"]["id"] == again.json()["invite"]["id"] == invite_id
+    assert again.json()["invite"]["send_count"] == 3
+    assert [i["id"] for i in client.get("/invites", headers=alice).json()
+            if i["email"] == email] == [invite_id]
+
+    assert accept(client, token_from(first)).status_code == 404     # old links are dead
+    assert accept(client, token_from(resent)).status_code == 404
+    assert accept(client, token_from(again)).status_code == 200      # latest one works
+    assert login(client, email, password="a-good-password", portal=True).status_code == 200
+
+
+def test_invite_races_two_simultaneous_accepts_create_one_account(
+    app: FastAPI, client: TestClient, alice: dict,
+) -> None:
+    email = new_email()
+    token = token_from(create_invite(client, alice, email))
+    results: list[int] = []
+    barrier = threading.Barrier(2)
+
+    def accept_in_thread() -> None:
+        own_client = TestClient(app, raise_server_exceptions=False)
+        barrier.wait()
+        results.append(accept(own_client, token).status_code)
+
+    threads = [threading.Thread(target=accept_in_thread) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sorted(results) == [200, 404]
+    with psycopg.connect(DSN) as admin:
+        assert admin.execute("SELECT count(*) FROM users WHERE email = %s", (email,)).fetchone()[0] == 1
+
+
+def test_invite_races_existing_account_must_be_logged_in_as_it(
+    client: TestClient,
+) -> None:
+    # Bob (Northwind admin) invites Mark (a Pixel member) as a Northwind client contact.
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    token = token_from(create_invite(client, bob, "mark@pixel.test", client_id=INITECH))
+    alice_identity = login(client, "alice@pixel.test").json()["identity_token"]
+    mark_identity = login(client, "mark@pixel.test").json()["identity_token"]
+    try:
+        # Logged out, trying to set a new password on Mark's account: refused.
+        assert accept(client, token, password="attacker-password").status_code == 401
+        # Logged in as someone else: refused.
+        assert accept(client, token, identity=alice_identity).status_code == 403
+        # Logged in as Mark: accepted.
+        resp = accept(client, token, identity=mark_identity)
+        assert resp.status_code == 200
+        assert resp.json() == {"agency_id": str(NORTHWIND), "role": "client_user", "login": "portal"}
+        # One person in two agencies now; his password is unchanged.
+        assert login(client, "mark@pixel.test", password="attacker-password").status_code == 401
+        portal = login(client, "mark@pixel.test", portal=True).json()["memberships"]
+        assert [m["agency_id"] for m in portal] == [str(NORTHWIND)]
+    finally:
+        with psycopg.connect(DSN, autocommit=True) as admin:
+            admin.execute("DELETE FROM agency_memberships WHERE agency_id = %s AND user_id = %s",
+                          (NORTHWIND, MARK))
+
+
+def test_logged_in_user_cannot_accept_invite_for_a_new_email(client: TestClient, alice: dict) -> None:
+    token = token_from(create_invite(client, alice, new_email()))
+    alice_identity = login(client, "alice@pixel.test").json()["identity_token"]
+    assert accept(client, token, identity=alice_identity).status_code == 403
+    assert accept(client, token).status_code == 200      # still usable by the real invitee
+
+
+def test_accept_with_bad_identity_token_is_401_not_logged_out(client: TestClient, alice: dict) -> None:
+    token = token_from(create_invite(client, alice, new_email()))
+    assert accept(client, token, identity="garbage.token").status_code == 401
+
+
+@pytest.mark.parametrize("name, password", [(None, "a-good-password"), ("  ", "a-good-password"),
+                                            ("New", None), ("New", "short")])
+def test_new_account_needs_name_and_valid_password(
+    client: TestClient, alice: dict, name: str | None, password: str | None,
+) -> None:
+    token = token_from(create_invite(client, alice, new_email()))
+    assert accept(client, token, name=name, password=password).status_code == 422
+    assert accept(client, token).status_code == 200      # a failed attempt doesn't burn the invite
+
+
+def test_unknown_or_garbage_invite_token_is_404(client: TestClient) -> None:
+    assert accept(client, "x" * 43).status_code == 404
+
+
+def test_revoked_invite_cannot_be_accepted(client: TestClient, alice: dict) -> None:
+    created = create_invite(client, alice, new_email())
+    invite_id = created.json()["invite"]["id"]
+    assert client.delete(f"/invites/{invite_id}", headers=alice).status_code == 204
+    assert accept(client, token_from(created)).status_code == 404
+    assert client.delete(f"/invites/{invite_id}", headers=alice).status_code == 409
+    assert client.post(f"/invites/{invite_id}/resend", headers=alice).status_code == 409
+
+
+def test_inviting_an_active_member_is_409(client: TestClient, alice: dict) -> None:
+    assert create_invite(client, alice, "MARK@pixel.test", role="agency_member",
+                         client_id=None).status_code == 409
+
+
+@pytest.mark.parametrize("role, client_id", [("client_user", None), ("agency_member", ACME)])
+def test_client_id_required_exactly_for_client_users(
+    client: TestClient, alice: dict, role: str, client_id: str | None,
+) -> None:
+    assert create_invite(client, alice, new_email(), role=role, client_id=client_id).status_code == 422
+
+
+def test_cross_tenant_invite_for_another_agencys_client_is_422(client: TestClient, alice: dict) -> None:
+    resp = create_invite(client, alice, new_email(), client_id=INITECH)
+    assert resp.status_code == 422 and "Initech" not in resp.text
+
+
+def test_cross_tenant_invite_ids_are_404(client: TestClient, alice: dict) -> None:
+    invite_id = create_invite(client, alice, new_email()).json()["invite"]["id"]
+    bob = session_headers(client, "bob@northwind.test", NORTHWIND)
+    assert client.post(f"/invites/{invite_id}/resend", headers=bob).status_code == 404
+    assert client.delete(f"/invites/{invite_id}", headers=bob).status_code == 404
+    assert invite_id not in [i["id"] for i in client.get("/invites", headers=bob).json()]
+    # And it's untouched for Alice.
+    assert client.post(f"/invites/{invite_id}/resend", headers=alice).status_code == 200
+
+
+@pytest.mark.parametrize("who, agency, portal", [
+    ("mark@pixel.test", PIXEL, False),    # agency_member
+    ("ravi@acme.test", PIXEL, True),      # client_user
+])
+def test_non_admin_cannot_manage_invites(
+    client: TestClient, alice: dict, who: str, agency: uuid.UUID, portal: bool,
+) -> None:
+    invite_id = create_invite(client, alice, new_email()).json()["invite"]["id"]
+    headers = session_headers(client, who, agency, portal=portal)
+    assert client.get("/invites", headers=headers).status_code == 403
+    assert create_invite(client, headers, new_email()).status_code == 403
+    assert client.post(f"/invites/{invite_id}/resend", headers=headers).status_code == 403
+    assert client.delete(f"/invites/{invite_id}", headers=headers).status_code == 403
+
+
+def test_rls_refusing_a_write_is_403_without_database_details(client: TestClient) -> None:
+    # A member writing an invite with no service check in the way: RLS says no.
+    resp = client.post("/_test/write-invite-skipping-service",
+                       headers=session_headers(client, "mark@pixel.test", PIXEL))
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "Not allowed"}
