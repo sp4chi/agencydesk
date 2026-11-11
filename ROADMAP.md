@@ -44,10 +44,10 @@ Rules for every step:
 11. [x] **Files: upload, download, review:** `routers/files.py`, `services/storage.py` (`222ded4..bdc6d2c`)
     Local-disk storage behind an interface. Downloads check the file row under RLS first, then stream it. Clients use `POST /files/{id}/review {decision}`.
     *Tests:* a client can't download an internal file by ID (404); a client can review only client-visible files; a client can't rename a file.
-12. [x] **Time entries + hours summary:** `routers/time.py`
+12. [x] **Time entries + hours summary:** `routers/time.py` (`e2945d4..f29e8ff`)
     Staff log their own time. Clients never receive raw entries.
     *Tests:* a client gets 404 on time entry endpoints; staff and client hour totals differ correctly.
-13. [ ] **Project dashboard:** `GET /projects/{id}/dashboard`
+13. [x] **Project dashboard:** `GET /projects/{id}/dashboard`
     Task counts by status plus `app.project_hours()`.
     *Tests:* the same project returns different numbers for staff and client, and both match the seed.
 
@@ -89,5 +89,5 @@ Each real bug found while building: what happened, the root cause, the fix, and 
 ## Status
 
 - Phase 1 complete (steps 1–4).
-- Phase 2: steps 5–12 complete. 150 tests passing (26 DB rules, 2 migrations, 122 API).
-- Next: step 13 (project dashboard).
+- Phase 2 complete (steps 5–13). 154 tests passing (26 DB rules, 2 migrations, 126 API).
+- Next: step 14 (frontend scaffold, API client, auth flow).
