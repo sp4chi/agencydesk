@@ -101,3 +101,26 @@ describe("createApi", () => {
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
 });
+
+describe("staff api", () => {
+  it("builds task filter queries and skips empty values", async () => {
+    const fetchMock = mockFetch(200, []);
+    await createApi("tok", vi.fn()).tasks.list("p1", { status: "todo", q: "", assignee: "me" });
+    expect(sentRequest(fetchMock).url).toBe("/api/projects/p1/tasks?status=todo&assignee=me");
+  });
+
+  it("uploads files as multipart (browser sets the boundary), not JSON", async () => {
+    const fetchMock = mockFetch(201, {});
+    await createApi("tok", vi.fn()).files.upload("t1", new File(["x"], "a.txt"), "client");
+    const { init, headers } = sentRequest(fetchMock);
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(headers["Content-Type"]).toBeUndefined();
+    expect((init.body as FormData).get("visibility")).toBe("client");
+  });
+
+  it("downloads files as a blob with the bearer token", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("bytes", { status: 200 })));
+    const blob = await createApi("tok", vi.fn()).files.download("f1");
+    expect(await blob.text()).toBe("bytes");
+  });
+});
