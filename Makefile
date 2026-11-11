@@ -24,8 +24,9 @@ db-reset: db-up          ## drop + recreate the dev DB, run migrations, load see
 migrate:                 ## alembic upgrade head
 	cd backend && ../$(BIN)/alembic upgrade head
 
-seed:                    ## load db/seed.sql into the dev DB
+seed:                    ## load db/seed.sql into the dev DB, plus placeholder bytes for seeded files
 	$(PSQL) -d agencydesk < db/seed.sql
+	$(PYTHON) scripts/seed_files.py
 
 run:                     ## start the API on http://localhost:8000 (needs .env: `make env`)
 	cd backend && ../$(BIN)/uvicorn app.main:create_app --factory --env-file ../.env --reload
